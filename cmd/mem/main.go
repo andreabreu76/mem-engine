@@ -24,6 +24,7 @@ commands:
   mcp       serve the memory tools to Claude Code over stdio (MCP)
   reindex   rebuild the memory index from the wiki
   setup     register the mem hooks and the mem-engine MCP server (--plan, --yes)
+  ui        serve the local web viewer on 127.0.0.1 ([--port N])
   version   print the mem version
 `
 
@@ -51,6 +52,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runReindex(args[1:], stdout, stderr)
 	case "setup":
 		return runSetup(args[1:], stdin, stdout, stderr)
+	case "ui":
+		return runUI(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintf(stdout, "mem %s\n", version)
 		return 0

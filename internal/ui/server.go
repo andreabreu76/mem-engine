@@ -54,7 +54,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/memory/{id}", s.api(s.deleteMemory))
 	mux.Handle("DELETE /api/observation/{id}", s.api(s.deleteObservation))
 	mux.Handle("GET /api/health", s.api(s.health))
-	return s.guard(mux)
+	mux.HandleFunc("GET /{$}", serveIndex)
+	root := http.NewServeMux()
+	root.HandleFunc("GET /assets/{name}", serveAsset)
+	root.Handle("/", s.authorize(mux))
+	return s.guard(root)
 }
 
 func (s *Server) guard(next http.Handler) http.Handler {
@@ -68,6 +72,12 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			writeError(w, http.StatusForbidden, "forbidden host")
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) authorize(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.validToken(r) {
 			writeError(w, http.StatusUnauthorized, "missing or invalid token")
 			return

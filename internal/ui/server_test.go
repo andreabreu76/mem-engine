@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -492,4 +493,91 @@ func TestStarIsTheSameSnapshotEverywhere(t *testing.T) {
 		f.do(t, http.MethodGet, "/api/item/"+id+"?project=*", "", http.StatusOK)
 	}
 	f.do(t, http.MethodGet, "/api/item/"+orphan+"?project=*", "", http.StatusNotFound)
+}
+
+func TestIndexServedWithToken(t *testing.T) {
+	f := newFixture(t)
+	r := f.request(http.MethodGet, "/?token="+f.srv.Token, "")
+	r.Header.Del("X-Mem-Token")
+	w := f.serve(r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET / = %d %s, want 200", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html", ct)
+	}
+	if !strings.Contains(w.Body.String(), `id="feed"`) {
+		t.Errorf("index has no feed: %q", w.Body.String())
+	}
+	if csp := w.Header().Get("Content-Security-Policy"); csp != "default-src 'self'; frame-ancestors 'none'" {
+		t.Errorf("CSP = %q", csp)
+	}
+	if strings.Contains(w.Body.String(), f.srv.Token) {
+		t.Error("index embeds the token")
+	}
+}
+
+func TestIndexWithoutToken401(t *testing.T) {
+	f := newFixture(t)
+	r := f.request(http.MethodGet, "/", "")
+	r.Header.Del("X-Mem-Token")
+	if w := f.serve(r); w.Code != http.StatusUnauthorized {
+		t.Fatalf("GET / without token = %d, want 401", w.Code)
+	}
+	r = f.request(http.MethodGet, "/?token="+f.srv.Token, "")
+	r.Host = "evil.example:47600"
+	if w := f.serve(r); w.Code != http.StatusForbidden {
+		t.Fatalf("GET / with bad Host = %d, want 403", w.Code)
+	}
+}
+
+func TestAssetsEmbedded(t *testing.T) {
+	f := newFixture(t)
+	for path, want := range map[string]string{"/assets/app.js": "javascript", "/assets/app.css": "text/css"} {
+		r := f.request(http.MethodGet, path, "")
+		r.Header.Del("X-Mem-Token")
+		w := f.serve(r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, want) {
+			t.Errorf("GET %s Content-Type = %q, want %s", path, ct, want)
+		}
+		if w.Body.Len() == 0 {
+			t.Errorf("GET %s is empty", path)
+		}
+		if w.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("GET %s without nosniff", path)
+		}
+		r.Host = "evil.example:47600"
+		if w := f.serve(r); w.Code != http.StatusForbidden {
+			t.Errorf("GET %s with bad Host = %d, want 403", path, w.Code)
+		}
+	}
+	for _, path := range []string{"/assets/", "/assets/index.html", "/assets/nope.js", "/assets/../server.go"} {
+		r := f.request(http.MethodGet, path, "")
+		r.Header.Del("X-Mem-Token")
+		if w := f.serve(r); w.Code == http.StatusOK {
+			t.Errorf("GET %s = 200, want an error", path)
+		}
+	}
+}
+
+func TestAssetsRespectCSP(t *testing.T) {
+	html, err := assetFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js, err := assetFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inline := regexp.MustCompile(`(?i)<script(?:\s[^>]*)?>\s*[^<\s]|<style|\sstyle\s*=|\son[a-z]+\s*=|javascript:|https?://`)
+	if m := inline.Find(html); m != nil {
+		t.Errorf("index.html has inline code or an external URL: %q", m)
+	}
+	unsafe := regexp.MustCompile(`innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function|localStorage|sessionStorage|https?://`)
+	if m := unsafe.Find(js); m != nil {
+		t.Errorf("app.js uses %q", m)
+	}
 }

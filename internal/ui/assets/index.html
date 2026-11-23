@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>mem-engine</title>
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <h1>mem-engine</h1>
+  <form id="search-form" class="filters" role="search">
+    <label>Project <select id="project"><option value="*">All projects</option></select></label>
+    <label>Type <input id="type" list="types" size="10" autocomplete="off"></label>
+    <datalist id="types">
+      <option value="fact"></option>
+      <option value="decision"></option>
+      <option value="gotcha"></option>
+      <option value="preference"></option>
+      <option value="reference"></option>
+      <option value="prompt"></option>
+      <option value="tool"></option>
+      <option value="tool_error"></option>
+      <option value="session_start"></option>
+      <option value="stop"></option>
+      <option value="compact"></option>
+    </datalist>
+    <label>Since <input id="since" type="date"></label>
+    <input id="query" type="search" placeholder="Search memories and observations" aria-label="Search">
+    <button type="submit">Search</button>
+  </form>
+  <span id="health" class="badge" role="status">health</span>
+</header>
+<p id="status" class="status" role="alert" hidden></p>
+<main class="layout">
+  <section class="column">
+    <div id="feed-panel">
+      <div class="panel-head">
+        <h2>Live feed</h2>
+        <span id="feed-state" class="muted"></span>
+      </div>
+      <ol id="feed" class="list"></ol>
+      <p id="feed-empty" class="muted">No observations yet.</p>
+    </div>
+    <div id="results-panel" hidden>
+      <div class="panel-head">
+        <h2 id="results-title">Results</h2>
+        <button id="back-to-feed" type="button">Back to live feed</button>
+      </div>
+      <ol id="results" class="list"></ol>
+      <p id="results-empty" class="muted" hidden>Nothing found.</p>
+    </div>
+  </section>
+  <section id="item-panel" class="column item" hidden>
+    <div class="panel-head">
+      <h2 id="item-title"></h2>
+      <button id="item-close" type="button">Close</button>
+    </div>
+    <p id="item-meta" class="muted"></p>
+    <p id="item-tags" class="chips"></p>
+    <ul id="item-files" class="files"></ul>
+    <pre id="item-body" class="body"></pre>
+    <p id="item-truncated" class="muted" hidden>Body truncated.</p>
+    <div class="actions">
+      <button id="item-edit" type="button" hidden>Edit</button>
+      <button id="item-delete" type="button" class="danger">Delete</button>
+    </div>
+    <form id="edit-form" class="edit" hidden>
+      <label>Type <input id="edit-type" required></label>
+      <label>Title <input id="edit-title" required></label>
+      <label>Summary <input id="edit-summary" required></label>
+      <label>Tags <input id="edit-tags" placeholder="comma separated"></label>
+      <label>Body <textarea id="edit-body" rows="12"></textarea></label>
+      <div class="actions">
+        <button type="submit">Save</button>
+        <button id="edit-cancel" type="button">Cancel</button>
+      </div>
+    </form>
+    <h3>Session timeline</h3>
+    <ol id="timeline" class="list compact"></ol>
+  </section>
+</main>
+</body>
+</html>

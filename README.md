@@ -90,6 +90,31 @@ saving: ~4455 tokens per session (97%)
 
 When the project has no `MEMORY.md`, only the handoff line is printed. A handoff larger than the native file shows a negative saving. The native file is read locally and nothing is sent anywhere, and `mem bench` never creates the data directory or the database: without `mem.db` it measures the minimal handoff of an empty project.
 
+## Viewer
+
+```sh
+mem ui [--port N]
+```
+
+Serves a local web viewer and prints the address to open:
+
+```
+mem ui: http://127.0.0.1:47600/?token=<random token>
+```
+
+The viewer listens on `127.0.0.1` only, on `ui_port` (47600 by default) or `--port`. The token is new on every run and every request needs it, requests with another `Host` are refused, and edits and deletes also need the page's own `Origin`. The page takes the token from the address bar into memory and removes it from the URL, so after a reload open the printed URL again. When the port is taken, `mem ui` exits with an error; stop it with Ctrl+C.
+
+What it shows:
+
+- a live feed of captured observations, refreshed every 2 seconds while the tab is visible;
+- search over memories and observations, filtered by project, type and date;
+- an item page with the full body and the session timeline around it;
+- an edit form for memories (type, title, summary, tags, body), saved to the wiki like `update`, and delete buttons for memories and observations, both asking for confirmation.
+
+The project selector starts at "All projects"; pick one to narrow the feed and the search to that project plus `user` memories.
+
+The badge at the top is green when the spool is empty and no capture failed in the last 24 hours. It turns red when events are waiting in the spool or hooks failed to capture, shows both counts, and its tooltip carries the last capture error. `mem doctor` gives the details.
+
 ## Configuration
 
 Data lives in `$MEM_ENGINE_HOME`, or `~/.mem-engine` when the variable is unset:

@@ -9,12 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/andreabreu76/mem-engine/internal/bench"
 	"github.com/andreabreu76/mem-engine/internal/config"
 	"github.com/andreabreu76/mem-engine/internal/importer"
-	"github.com/andreabreu76/mem-engine/internal/memory"
 	"github.com/andreabreu76/mem-engine/internal/project"
 	"github.com/andreabreu76/mem-engine/internal/store"
 )
@@ -134,7 +132,10 @@ func importNative(a importArgs) (importer.Report, project.Project, error) {
 	if err != nil {
 		return importer.Report{}, project.Project{}, err
 	}
-	svc := &memory.Service{Store: st, WikiRoot: cfg.WikiDir(), Now: time.Now}
+	svc, err := newMemoryService(st, cfg)
+	if err != nil {
+		return importer.Report{}, project.Project{}, err
+	}
 	rep, err := importer.Run(ctx, svc, st, importer.Options{Dir: a.dir, Target: target, DryRun: a.dryRun})
 	return rep, target, err
 }

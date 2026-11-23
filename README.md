@@ -230,4 +230,18 @@ No groups or aliases are defined by default.
 
 ## Privacy
 
-Everything stays on your machine: nothing captured is sent to any external service. Text inside `<private>...</private>` tags is removed before anything is stored, and builtin patterns redact common secrets (tokens, keys, passwords in URLs) before any write to the database, the spool or the log. Add your own patterns with `redact_extra`.
+Everything stays on your machine: nothing captured is sent to any external service. Captured observations and curated memories (`save`, `update`, the viewer and `mem import`) go through the same redaction before any write to the database, the spool, the log or the wiki: text inside `<private>...</private>` tags is removed, and builtin patterns redact common secrets (tokens, keys, passwords in URLs) in titles, summaries, bodies and tags. Add your own patterns with `redact_extra`.
+
+`forget` deletes the memory file and its index entry, but the wiki of each project is a local git repository, so earlier versions of the file stay in its history. To purge them, close Claude Code and `mem ui`, then rewrite the history of that project's wiki, for example with [git-filter-repo](https://github.com/newren/git-filter-repo):
+
+```sh
+cd ~/.mem-engine/wiki/billing-api-1a2b3c
+git filter-repo --force --invert-paths --path deploy-token.md
+```
+
+or drop the whole history of that wiki while keeping the current files:
+
+```sh
+cd ~/.mem-engine/wiki/billing-api-1a2b3c
+rm -rf .git && git init -q && git add -A && git commit -qm "mem: reset history"
+```

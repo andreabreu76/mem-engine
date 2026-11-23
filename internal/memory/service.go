@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andreabreu76/mem-engine/internal/project"
+	"github.com/andreabreu76/mem-engine/internal/redact"
 	"github.com/andreabreu76/mem-engine/internal/store"
 	"github.com/andreabreu76/mem-engine/internal/wiki"
 )
@@ -38,6 +40,7 @@ type Service struct {
 	Store    *store.Store
 	WikiRoot string
 	Now      func() time.Time
+	Redactor *redact.Redactor
 
 	beforeReplace func()
 }
@@ -56,6 +59,7 @@ var (
 )
 
 func (s *Service) Save(ctx context.Context, p project.Project, in Input) (store.Memory, error) {
+	in = s.cleanInput(in)
 	if err := validate(in.Type, in.Title, in.Summary); err != nil {
 		return store.Memory{}, err
 	}
@@ -111,6 +115,7 @@ func (s *Service) Save(ctx context.Context, p project.Project, in Input) (store.
 }
 
 func (s *Service) Update(ctx context.Context, id string, patch Patch) (store.Memory, error) {
+	patch = s.cleanPatch(patch)
 	if err := validatePatch(patch); err != nil {
 		return store.Memory{}, err
 	}
@@ -298,6 +303,55 @@ func (s *Service) locate(rel string) (*wiki.Repo, string, error) {
 		return nil, "", err
 	}
 	return repo, name, nil
+}
+
+var builtinRedactor = sync.OnceValue(func() *redact.Redactor {
+	r, err := redact.New(nil, false)
+	if err != nil {
+		panic(err)
+	}
+	return r
+})
+
+func (s *Service) clean(text string) string {
+	r := s.Redactor
+	if r == nil {
+		r = builtinRedactor()
+	}
+	return r.Clean(text)
+}
+
+func (s *Service) cleanTags(tags []string) []string {
+	if tags == nil {
+		return nil
+	}
+	out := make([]string, len(tags))
+	for i, tag := range tags {
+		out[i] = s.clean(tag)
+	}
+	return out
+}
+
+func (s *Service) cleanInput(in Input) Input {
+	in.Title = s.clean(in.Title)
+	in.Summary = s.clean(in.Summary)
+	in.Body = s.clean(in.Body)
+	in.Tags = s.cleanTags(in.Tags)
+	return in
+}
+
+func (s *Service) cleanPatch(p Patch) Patch {
+	for _, field := range []**string{&p.Title, &p.Summary, &p.Body} {
+		if *field != nil {
+			v := s.clean(**field)
+			*field = &v
+		}
+	}
+	if p.Tags != nil {
+		tags := s.cleanTags(*p.Tags)
+		p.Tags = &tags
+	}
+	return p
 }
 
 func (s *Service) now() time.Time {

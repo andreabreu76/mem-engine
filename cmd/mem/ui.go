@@ -17,7 +17,6 @@ import (
 
 	"github.com/andreabreu76/mem-engine/internal/applog"
 	"github.com/andreabreu76/mem-engine/internal/config"
-	"github.com/andreabreu76/mem-engine/internal/memory"
 	"github.com/andreabreu76/mem-engine/internal/store"
 	"github.com/andreabreu76/mem-engine/internal/ui"
 )
@@ -81,9 +80,14 @@ func runUI(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "mem ui: listen on %s: %v\n", addr, err)
 		return 1
 	}
+	svc, err := newMemoryService(st, cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "mem ui: %v\n", err)
+		return 1
+	}
 	srv := &ui.Server{
 		Store:  st,
-		Memory: &memory.Service{Store: st, WikiRoot: cfg.WikiDir(), Now: time.Now},
+		Memory: svc,
 		Cfg:    cfg,
 		Token:  ui.NewToken(),
 		Port:   *port,

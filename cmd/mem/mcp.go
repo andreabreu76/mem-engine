@@ -18,6 +18,7 @@ import (
 	"github.com/andreabreu76/mem-engine/internal/mcpserver"
 	"github.com/andreabreu76/mem-engine/internal/memory"
 	"github.com/andreabreu76/mem-engine/internal/project"
+	"github.com/andreabreu76/mem-engine/internal/redact"
 	"github.com/andreabreu76/mem-engine/internal/store"
 )
 
@@ -55,9 +56,14 @@ func runMCP(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "mem mcp: %v\n", err)
 		return 1
 	}
+	svc, err := newMemoryService(st, cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "mem mcp: %v\n", err)
+		return 1
+	}
 	srv := mcpserver.New(mcpserver.Deps{
 		Store:   st,
-		Memory:  &memory.Service{Store: st, WikiRoot: cfg.WikiDir(), Now: time.Now},
+		Memory:  svc,
 		Current: current,
 		Now:     time.Now,
 		Log:     log,
@@ -83,4 +89,12 @@ func currentProject(cfg config.Config) (project.Project, error) {
 		dir = wd
 	}
 	return project.Resolve(dir, cfg)
+}
+
+func newMemoryService(st *store.Store, cfg config.Config) (*memory.Service, error) {
+	r, err := redact.New(cfg.RedactExtra, cfg.RedactDisableBuiltin)
+	if err != nil {
+		return nil, fmt.Errorf("invalid redact_extra pattern in config.toml: %w", err)
+	}
+	return &memory.Service{Store: st, WikiRoot: cfg.WikiDir(), Now: time.Now, Redactor: r}, nil
 }

@@ -241,3 +241,49 @@ func TestImportCommandBadArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestImportCommandRedactsWithConfig(t *testing.T) {
+	home := importHome(t)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(`redact_extra = ["acme-pin-[0-9]{4}"]`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	token := "ghp_" + strings.Repeat("b", 36)
+	pin := "acme-pin-" + "7310"
+	src := filepath.Join(t.TempDir(), "memory")
+	if err := os.MkdirAll(src, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	doc := "---\nname: deploy-access\ndescription: deploy uses " + token + "\nmetadata:\n  type: reference\n---\n\nPin " + pin + " and token " + token + ".\n"
+	if err := os.WriteFile(filepath.Join(src, "deploy-access.md"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errb bytes.Buffer
+	if code := run([]string{"import", src, "--user"}, nil, &out, &errb); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb.String())
+	}
+	var written strings.Builder
+	err := filepath.WalkDir(filepath.Join(home, "wiki"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || strings.Contains(path, string(filepath.Separator)+".git"+string(filepath.Separator)) {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		written.Write(b)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := exec.Command("git", "-C", filepath.Join(home, "wiki", project.User.Dir), "log", "-p", "--all").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, history)
+	}
+	for _, secret := range []string{token, pin} {
+		if strings.Contains(written.String(), secret) || strings.Contains(string(history), secret) {
+			t.Errorf("wiki keeps %q:\n%s\n%s", secret, written.String(), history)
+		}
+	}
+	if !strings.Contains(written.String(), "[REDACTED:extra]") {
+		t.Errorf("wiki = %s", written.String())
+	}
+}

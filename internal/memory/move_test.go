@@ -2,12 +2,14 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andreabreu76/mem-engine/internal/project"
 	"github.com/andreabreu76/mem-engine/internal/store"
@@ -245,5 +247,63 @@ func TestMoveProjectFailsWhenSourceKeepsFiles(t *testing.T) {
 	}
 	if _, statErr := os.Stat(junk); statErr != nil {
 		t.Errorf("unparseable file touched: %v", statErr)
+	}
+}
+
+func TestForgetFollowsMemoryMovedWhileWaitingForLock(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	m, err := f.svc.Save(ctx, billingOld, defaultInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := wiki.OpenRepo(f.svc.WikiRoot, billingOld.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := wiki.OpenRepo(f.svc.WikiRoot, billing.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := src.Lock(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.svc.Forget(ctx, m.ID) }()
+	time.Sleep(300 * time.Millisecond)
+
+	name := filepath.Base(m.Path)
+	doc := parseFile(t, filepath.Join(src.Dir, name))
+	doc.Project = billing.Key
+	if err := dst.Write(name, wiki.Marshal(doc)); err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.Commit("mem: move "+m.ID, name); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Remove(name); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Commit("mem: move "+m.ID, name); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Store.UpsertMemory(ctx, toMemory(doc, billing.Dir+"/"+name)); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+
+	if err := <-done; err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst.Dir, name)); !os.IsNotExist(err) {
+		t.Errorf("moved file survived Forget: %v", err)
+	}
+	if _, err := f.svc.Store.GetMemory(ctx, m.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("index row survived: %v", err)
+	}
+	rep, err := f.svc.Reindex(ctx)
+	if err != nil || rep.Indexed != 0 {
+		t.Errorf("Reindex after Forget = %+v, %v; want nothing indexed", rep, err)
 	}
 }

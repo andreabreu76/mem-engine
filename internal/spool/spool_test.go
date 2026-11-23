@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,7 +40,8 @@ func TestAppendDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o700 {
+	checkPerm := runtime.GOOS != "windows"
+	if perm := info.Mode().Perm(); checkPerm && perm != 0o700 {
 		t.Errorf("dir perm = %o, want 700", perm)
 	}
 	entries, err := os.ReadDir(dir)
@@ -57,7 +59,7 @@ func TestAppendDrain(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if perm := fi.Mode().Perm(); perm != 0o600 {
+		if perm := fi.Mode().Perm(); checkPerm && perm != 0o600 {
 			t.Errorf("%s perm = %o, want 600", e.Name(), perm)
 		}
 	}
@@ -429,5 +431,51 @@ func TestDrainConcurrentProcesses(t *testing.T) {
 	}
 	if left := names(t, dir); len(left) != 0 {
 		t.Errorf("files left: %v", left)
+	}
+}
+
+func TestDrainSkipsFileWhenClaimFails(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		inject func(t *testing.T, blocked string)
+	}{
+		{"touch", func(t *testing.T, blocked string) {
+			orig := setTimes
+			setTimes = func(path string, a, m time.Time) error {
+				if filepath.Base(path) == blocked {
+					return errors.New("sharing violation")
+				}
+				return orig(path, a, m)
+			}
+			t.Cleanup(func() { setTimes = orig })
+		}},
+		{"rename", func(t *testing.T, blocked string) {
+			orig := renameFile
+			renameFile = func(from, to string) error {
+				if filepath.Base(from) == blocked {
+					return errors.New("access denied")
+				}
+				return orig(from, to)
+			}
+			t.Cleanup(func() { renameFile = orig })
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeAged(t, dir, "1-1.jsonl", "{\"n\":1}\n", 0)
+			writeAged(t, dir, "1-2.jsonl", "{\"n\":2}\n", 0)
+			tc.inject(t, "1-1.jsonl")
+
+			got, err := collect(t, dir)
+			if err != nil {
+				t.Fatalf("Drain: %v", err)
+			}
+			if len(got) != 1 || got[0] != 2 {
+				t.Errorf("applied %v, want [2]", got)
+			}
+			if left := names(t, dir); len(left) != 1 || left[0] != "1-1.jsonl" {
+				t.Errorf("files left = %v, want [1-1.jsonl]", left)
+			}
+		})
 	}
 }

@@ -163,6 +163,54 @@ func TestTouchSessionFillsEmptySource(t *testing.T) {
 	}
 }
 
+func TestTouchSessionEndBeforeStartKeepsStartTime(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	start := time.Unix(1700000000, 0)
+	end := start.Add(time.Hour)
+
+	if err := s.TouchSession(ctx, SessionEvent{SessionID: "s1", Project: "billing-api", EndReason: "logout", At: end, End: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchSession(ctx, SessionEvent{SessionID: "s1", Project: "billing-api", Source: "startup", At: start}); err != nil {
+		t.Fatal(err)
+	}
+	var startedAt, endedAt int64
+	var source string
+	if err := s.db.QueryRowContext(ctx, "SELECT started_at, ended_at, source FROM sessions WHERE id = 's1'").Scan(&startedAt, &endedAt, &source); err != nil {
+		t.Fatal(err)
+	}
+	if startedAt != start.Unix() {
+		t.Errorf("started_at = %d, want %d", startedAt, start.Unix())
+	}
+	if endedAt != end.Unix() {
+		t.Errorf("ended_at = %d, want %d", endedAt, end.Unix())
+	}
+	if source != "startup" {
+		t.Errorf("source = %q, want startup", source)
+	}
+}
+
+func TestTouchSessionEndWithoutReasonKeepsReason(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	at := time.Unix(1700000000, 0)
+
+	if err := s.TouchSession(ctx, SessionEvent{SessionID: "s1", Project: "billing-api", EndReason: "logout", At: at, End: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchSession(ctx, SessionEvent{SessionID: "s1", Project: "billing-api", At: at.Add(time.Minute), End: true}); err != nil {
+		t.Fatal(err)
+	}
+	var reason string
+	if err := s.db.QueryRowContext(ctx, "SELECT end_reason FROM sessions WHERE id = 's1'").Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "logout" {
+		t.Errorf("end_reason = %q, want logout", reason)
+	}
+}
+
 func TestCaptureErrorsSince(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)

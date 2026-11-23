@@ -26,8 +26,10 @@ const (
 )
 
 var (
-	drainMu   sync.Mutex
-	lastStamp atomic.Int64
+	drainMu    sync.Mutex
+	lastStamp  atomic.Int64
+	setTimes   = os.Chtimes
+	renameFile = os.Rename
 )
 
 func Append(dir string, v any) error {
@@ -89,17 +91,8 @@ func drainFile(dir, name string, apply func(json.RawMessage) error) (int, error)
 	if _, err := os.Lstat(claimed); err == nil {
 		return 0, nil
 	}
-	if err := touch(src); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("spool drain: claim %s: %w", name, err)
-	}
-	if err := os.Rename(src, claimed); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("spool drain: claim %s: %w", name, err)
+	if touch(src) != nil || renameFile(src, claimed) != nil {
+		return 0, nil
 	}
 	data, err := os.ReadFile(claimed)
 	if err != nil {
@@ -140,7 +133,7 @@ func claimName(name string) string {
 
 func touch(path string) error {
 	now := time.Now()
-	return os.Chtimes(path, now, now)
+	return setTimes(path, now, now)
 }
 
 func publish(dir, preferred string, data []byte) error {
@@ -150,6 +143,11 @@ func publish(dir, preferred string, data []byte) error {
 	}
 	tmpPath := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		os.Remove(tmpPath)
 		return err

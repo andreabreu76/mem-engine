@@ -67,8 +67,9 @@ VALUES (?1, ?2, nullif(?3, ''), nullif(?4, ''), ?5, ?6, CASE WHEN ?7 THEN nullif
 ON CONFLICT(id) DO UPDATE SET
   cwd = coalesce(nullif(sessions.cwd, ''), excluded.cwd),
   source = coalesce(nullif(sessions.source, ''), excluded.source),
+  started_at = min(sessions.started_at, excluded.started_at),
   ended_at = CASE WHEN ?7 THEN excluded.ended_at ELSE sessions.ended_at END,
-  end_reason = CASE WHEN ?7 THEN excluded.end_reason ELSE sessions.end_reason END`,
+  end_reason = CASE WHEN ?7 THEN coalesce(excluded.end_reason, sessions.end_reason) ELSE sessions.end_reason END`,
 		ev.SessionID, ev.Project, ev.Cwd, ev.Source, ev.At.Unix(), endedAt, ev.End, ev.EndReason)
 	if err != nil {
 		return fmt.Errorf("touch session %s: %w", ev.SessionID, err)

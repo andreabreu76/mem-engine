@@ -29,6 +29,19 @@ To register the MCP server by hand:
 claude mcp add --scope user mem-engine -- mem mcp
 ```
 
+## Install as a Claude Code plugin
+
+This repository is also a Claude Code plugin marketplace. The `mem-engine` plugin registers the same capture hooks (`mem hook <Event>`), the `mem-engine` MCP server (`mem mcp`) and a short skill that tells the agent to use the memory tools instead of writing memory files.
+
+```sh
+claude plugin marketplace add andreabreu76/mem-engine
+claude plugin install mem-engine@mem-engine
+```
+
+Inside a session, `/plugin install mem-engine --marketplace andreabreu76/mem-engine` does both in one step.
+
+The plugin only wires Claude Code to the binary: `mem` must still be installed and on `PATH` (see Install). Use either the plugin or `mem setup`, not both, or every hook runs twice; `mem doctor` warns about it in the `hooks-duplicated` check.
+
 ## MCP tools
 
 `mem mcp` serves six tools over stdio. The current project is `$CLAUDE_PROJECT_DIR`, or the working directory when it is unset.
@@ -62,17 +75,18 @@ mem doctor
 Prints one line per check, `ok`, `warn` or `FAIL`, followed by the check name and a detail:
 
 ```
-warn  binary          PATH resolves mem to /usr/local/bin/mem, running /home/dev/go/bin/mem
-ok    config          defaults (no config.toml)
-ok    data-dir        /home/dev/.mem-engine
-ok    database        /home/dev/.mem-engine/mem.db (schema 1, fts5 ok)
-ok    spool           empty
-ok    capture-errors  none in the last 24h
-ok    hooks           /home/dev/.claude/settings.json
-ok    mcp             mem-engine registered with claude
+warn  binary            PATH resolves mem to /usr/local/bin/mem, running /home/dev/go/bin/mem
+ok    config            defaults (no config.toml)
+ok    data-dir          /home/dev/.mem-engine
+ok    database          /home/dev/.mem-engine/mem.db (schema 1, fts5 ok)
+ok    spool             empty
+ok    capture-errors    none in the last 24h
+ok    hooks             /home/dev/.claude/settings.json
+ok    hooks-duplicated  none
+ok    mcp               mem-engine registered with claude
 ```
 
-Checks: `binary` (the `mem` on `PATH` is the one running), `config` (`config.toml` parses), `data-dir` (writable), `database` (opens, schema version, FTS5), `spool` (events waiting to be written), `capture-errors` (hook failures in the last 24 hours), `hooks` (registered and up to date) and `mcp` (`claude mcp get mem-engine` succeeds, skipped when `claude` is not on `PATH`). `mem doctor` never creates the data directory or the database. It exits with 1 only when a check fails.
+Checks: `binary` (the `mem` on `PATH` is the one running), `config` (`config.toml` parses), `data-dir` (writable), `database` (opens, schema version, FTS5), `spool` (events waiting to be written), `capture-errors` (hook failures in the last 24 hours), `hooks` (registered and up to date), `hooks-duplicated` (mem hooks in `settings.json` while the `mem-engine` plugin is also enabled) and `mcp` (`claude mcp get mem-engine` succeeds, skipped when `claude` is not on `PATH`). `mem doctor` never creates the data directory or the database. It exits with 1 only when a check fails.
 
 ## Benchmark
 

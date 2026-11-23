@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -88,7 +89,7 @@ func TestDoctorHealthy(t *testing.T) {
 	createDB(t, env)
 
 	checks := Run(context.Background(), env)
-	want := []string{"binary", "config", "data-dir", "database", "spool", "capture-errors", "hooks", "mcp"}
+	want := []string{"binary", "config", "data-dir", "database", "spool", "capture-errors", "hooks", "hooks-duplicated", "mcp"}
 	if len(checks) != len(want) {
 		t.Fatalf("got %d checks, want %d: %+v", len(checks), len(want), checks)
 	}
@@ -287,5 +288,57 @@ func TestDoctorMCP(t *testing.T) {
 	got = find(t, Run(context.Background(), env), "mcp")
 	if got.Level != Warn || !strings.Contains(got.Detail, "run mem setup") {
 		t.Errorf("not registered: mcp = %v %q, want Warn run mem setup", got.Level, got.Detail)
+	}
+}
+
+func TestDoctorDuplicatedHooks(t *testing.T) {
+	env := newEnv(t)
+	createDB(t, env)
+	settings := filepath.Join(env.UserHome, ".claude", "settings.json")
+	hooks, _, err := setup.MergeHooks(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withPlugins := func(enabled string) string {
+		var m map[string]any
+		if err := json.Unmarshal(hooks, &m); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(enabled), &m); err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	cases := []struct {
+		name, settings string
+		want           Level
+	}{
+		{"no settings", "", OK},
+		{"plugin only", `{"enabledPlugins": {"mem-engine@mem-engine": true}}`, OK},
+		{"settings hooks only", string(hooks), OK},
+		{"plugin disabled", withPlugins(`{"enabledPlugins": {"mem-engine@mem-engine": false}}`), OK},
+		{"other plugin", withPlugins(`{"enabledPlugins": {"mem-engine-extra@acme": true, "other@mem-engine": true}}`), OK},
+		{"both", withPlugins(`{"enabledPlugins": {"mem-engine@mem-engine": true}}`), Warn},
+		{"both from a fork", withPlugins(`{"enabledPlugins": {"mem-engine@acme": true}}`), Warn},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			os.Remove(settings)
+			if c.settings != "" {
+				writeFile(t, settings, c.settings)
+			}
+			got := find(t, Run(context.Background(), env), "hooks-duplicated")
+			if got.Level != c.want {
+				t.Fatalf("hooks-duplicated = %v %q, want %v", got.Level, got.Detail, c.want)
+			}
+			if c.want == Warn && (!strings.Contains(got.Detail, "mem-engine@") || !strings.Contains(got.Detail, "remove")) {
+				t.Errorf("detail %q should name the plugin and suggest removing one", got.Detail)
+			}
+		})
 	}
 }

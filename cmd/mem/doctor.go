@@ -45,7 +45,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 	code := 0
 	for _, c := range doctor.Run(context.Background(), env) {
-		fmt.Fprintf(stdout, "%-4s  %-14s  %s\n", c.Level, c.Name, c.Detail)
+		fmt.Fprintf(stdout, "%-4s  %-16s  %s\n", c.Level, c.Name, c.Detail)
 		if c.Level == doctor.Fail {
 			code = 1
 		}

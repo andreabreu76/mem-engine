@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -61,6 +62,7 @@ var checks = []checkFunc{
 	checkSpool,
 	checkCaptureErrors,
 	checkHooks,
+	checkHooksDuplicated,
 	checkMCP,
 }
 
@@ -231,6 +233,31 @@ func checkHooks(_ context.Context, env Env) Check {
 		c.Level, c.Detail = Warn, "hooks outdated, run mem setup"
 	default:
 		c.Detail = path
+	}
+	return c
+}
+
+const pluginPrefix = "mem-engine@"
+
+func checkHooksDuplicated(_ context.Context, env Env) Check {
+	c := Check{Name: "hooks-duplicated", Detail: "none"}
+	path := filepath.Join(env.UserHome, ".claude", "settings.json")
+	data, _, err := setup.ReadSettings(path)
+	if err != nil || !setup.HasMemHooks(data) {
+		return c
+	}
+	var settings struct {
+		EnabledPlugins map[string]any `json:"enabledPlugins"`
+	}
+	if json.Unmarshal(data, &settings) != nil {
+		return c
+	}
+	for name, enabled := range settings.EnabledPlugins {
+		if enabled == true && strings.HasPrefix(name, pluginPrefix) {
+			c.Level = Warn
+			c.Detail = fmt.Sprintf("mem hooks in %s and plugin %s both run, remove the hooks from settings.json or uninstall the plugin", path, name)
+			return c
+		}
 	}
 	return c
 }

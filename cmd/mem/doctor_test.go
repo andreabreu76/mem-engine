@@ -18,7 +18,7 @@ func TestDoctorCommand(t *testing.T) {
 		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, out.String(), errb.String())
 	}
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(lines) != 8 {
+	if len(lines) != 9 {
 		t.Fatalf("got %d lines: %q", len(lines), out.String())
 	}
 	for _, l := range lines {

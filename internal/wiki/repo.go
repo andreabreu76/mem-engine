@@ -44,14 +44,29 @@ func OpenRepo(wikiRoot, dirName string) (*Repo, error) {
 	return &Repo{Dir: dir}, nil
 }
 
+func LockRoot(ctx context.Context, wikiRoot string, shared bool) (func(), error) {
+	if err := os.MkdirAll(wikiRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("wiki: create %s: %w", wikiRoot, err)
+	}
+	return lockDir(ctx, wikiRoot, shared)
+}
+
 func (r *Repo) Lock(ctx context.Context) (func(), error) {
-	fl := flock.New(filepath.Join(r.Dir, lockFile), flock.SetPermissions(0o600))
-	locked, err := fl.TryLockContext(ctx, lockRetry)
+	return lockDir(ctx, r.Dir, false)
+}
+
+func lockDir(ctx context.Context, dir string, shared bool) (func(), error) {
+	fl := flock.New(filepath.Join(dir, lockFile), flock.SetPermissions(0o600))
+	try := fl.TryLockContext
+	if shared {
+		try = fl.TryRLockContext
+	}
+	locked, err := try(ctx, lockRetry)
 	if err != nil {
-		return nil, fmt.Errorf("wiki: lock %s: %w", r.Dir, err)
+		return nil, fmt.Errorf("wiki: lock %s: %w", dir, err)
 	}
 	if !locked {
-		return nil, fmt.Errorf("wiki: lock %s: not acquired", r.Dir)
+		return nil, fmt.Errorf("wiki: lock %s: not acquired", dir)
 	}
 	return func() { _ = fl.Unlock() }, nil
 }

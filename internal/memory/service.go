@@ -70,6 +70,11 @@ func (s *Service) Save(ctx context.Context, p project.Project, in Input) (store.
 	if err := s.Store.EnsureProject(ctx, store.ProjectRow{Key: p.Key, Name: p.Name, Dir: p.Dir}); err != nil {
 		return store.Memory{}, err
 	}
+	unlockRoot, err := wiki.LockRoot(ctx, s.WikiRoot, true)
+	if err != nil {
+		return store.Memory{}, err
+	}
+	defer unlockRoot()
 	repo, err := wiki.OpenRepo(s.WikiRoot, p.Dir)
 	if err != nil {
 		return store.Memory{}, err
@@ -187,6 +192,11 @@ func (s *Service) Forget(ctx context.Context, id string) error {
 
 func (s *Service) Reindex(ctx context.Context) (ReindexReport, error) {
 	var rep ReindexReport
+	unlockRoot, err := wiki.LockRoot(ctx, s.WikiRoot, false)
+	if err != nil {
+		return rep, fmt.Errorf("reindex: %w", err)
+	}
+	defer unlockRoot()
 	entries, err := os.ReadDir(s.WikiRoot)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return rep, fmt.Errorf("reindex: %w", err)

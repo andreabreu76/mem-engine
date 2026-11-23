@@ -21,6 +21,11 @@ func (s *Service) MoveProject(ctx context.Context, from, to project.Project) (mo
 	case from.Key == project.User.Key || to.Key == project.User.Key:
 		return 0, errors.New("move: the user scope cannot be moved")
 	}
+	unlockRoot, err := wiki.LockRoot(ctx, s.WikiRoot, true)
+	if err != nil {
+		return 0, err
+	}
+	defer unlockRoot()
 	src, err := wiki.OpenRepo(s.WikiRoot, from.Dir)
 	if err != nil {
 		return 0, err

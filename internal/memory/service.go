@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -39,6 +38,8 @@ type Service struct {
 	Store    *store.Store
 	WikiRoot string
 	Now      func() time.Time
+
+	beforeReplace func()
 }
 
 var (
@@ -89,6 +90,9 @@ func (s *Service) Save(ctx context.Context, p project.Project, in Input) (store.
 		return store.Memory{}, err
 	}
 	if err := repo.Commit("mem: save "+id+" "+doc.Title, name); err != nil {
+		if rmErr := repo.Remove(name); rmErr != nil {
+			return store.Memory{}, errors.Join(err, rmErr)
+		}
 		return store.Memory{}, err
 	}
 	m := toMemory(doc, p.Dir+"/"+name)
@@ -105,7 +109,7 @@ func (s *Service) Update(ctx context.Context, id string, patch Patch) (store.Mem
 	}
 	repo, name, err := s.locate(current.Path)
 	if err != nil {
-		return store.Memory{}, err
+		return store.Memory{}, fmt.Errorf("update %s: %w", id, err)
 	}
 	unlock, err := repo.Lock(ctx)
 	if err != nil {
@@ -113,16 +117,9 @@ func (s *Service) Update(ctx context.Context, id string, patch Patch) (store.Mem
 	}
 	defer unlock()
 
-	b, err := os.ReadFile(filepath.Join(repo.Dir, name))
+	doc, err := readOwnDoc(repo, name, id)
 	if err != nil {
-		return store.Memory{}, fmt.Errorf("update %s: %w (run mem reindex)", id, err)
-	}
-	doc, err := wiki.Parse(b)
-	if err != nil {
-		return store.Memory{}, fmt.Errorf("update %s: %s: %w", id, current.Path, err)
-	}
-	if doc.ID != id {
-		return store.Memory{}, fmt.Errorf("update %s: %s holds memory %s (run mem reindex)", id, current.Path, doc.ID)
+		return store.Memory{}, fmt.Errorf("update %s: %s: %w (run mem reindex)", id, current.Path, err)
 	}
 	apply(&doc, patch)
 	if err := validate(doc.Type, doc.Title, doc.Summary); err != nil {
@@ -148,8 +145,11 @@ func (s *Service) Forget(ctx context.Context, id string) error {
 		return fmt.Errorf("forget: %w", err)
 	}
 	repo, name, err := s.locate(current.Path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return s.Store.DeleteMemory(ctx, id)
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("forget %s: %w", id, err)
 	}
 	unlock, err := repo.Lock(ctx)
 	if err != nil {
@@ -157,6 +157,9 @@ func (s *Service) Forget(ctx context.Context, id string) error {
 	}
 	defer unlock()
 
+	if _, err := readOwnDoc(repo, name, id); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("forget %s: %s: %w (run mem reindex)", id, current.Path, err)
+	}
 	if err := repo.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
@@ -172,18 +175,27 @@ func (s *Service) Reindex(ctx context.Context) (ReindexReport, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return rep, fmt.Errorf("reindex: %w", err)
 	}
-	var ms []store.Memory
-	seen := map[string]string{}
-	projects := map[string]store.ProjectRow{}
+	var repos []*wiki.Repo
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		dir := e.Name()
-		repo, err := wiki.OpenRepo(s.WikiRoot, dir)
+		repo, err := wiki.OpenRepo(s.WikiRoot, e.Name())
 		if err != nil {
 			return rep, fmt.Errorf("reindex: %w", err)
 		}
+		unlock, err := repo.Lock(ctx)
+		if err != nil {
+			return rep, fmt.Errorf("reindex: %w", err)
+		}
+		defer unlock()
+		repos = append(repos, repo)
+	}
+	var ms []store.Memory
+	seen := map[string]string{}
+	projects := map[string]store.ProjectRow{}
+	for _, repo := range repos {
+		dir := filepath.Base(repo.Dir)
 		names, err := repo.List()
 		if err != nil {
 			return rep, fmt.Errorf("reindex: %w", err)
@@ -212,6 +224,9 @@ func (s *Service) Reindex(ctx context.Context) (ReindexReport, error) {
 			return rep, fmt.Errorf("reindex: %w", err)
 		}
 	}
+	if s.beforeReplace != nil {
+		s.beforeReplace()
+	}
 	if err := s.Store.ReplaceAllMemories(ctx, ms); err != nil {
 		return rep, fmt.Errorf("reindex: %w", err)
 	}
@@ -231,14 +246,38 @@ func readDoc(file string) (wiki.Doc, error) {
 	if doc.Project == "" {
 		return wiki.Doc{}, errors.New("wiki: frontmatter without project")
 	}
+	if err := validateType(doc.Type); err != nil {
+		return wiki.Doc{}, err
+	}
+	return doc, nil
+}
+
+func readOwnDoc(repo *wiki.Repo, name, id string) (wiki.Doc, error) {
+	b, err := os.ReadFile(filepath.Join(repo.Dir, name))
+	if err != nil {
+		return wiki.Doc{}, err
+	}
+	doc, err := wiki.Parse(b)
+	if err != nil {
+		return wiki.Doc{}, err
+	}
+	if doc.ID != id {
+		return wiki.Doc{}, fmt.Errorf("file holds memory %s", doc.ID)
+	}
 	return doc, nil
 }
 
 func (s *Service) locate(rel string) (*wiki.Repo, string, error) {
-	dir, name := path.Split(rel)
-	dir = strings.TrimSuffix(dir, "/")
-	if dir == "" || strings.Contains(dir, "/") {
-		return nil, "", fmt.Errorf("memory path %q is not <dir>/<file> (run mem reindex)", rel)
+	dir, name, ok := strings.Cut(rel, "/")
+	if !ok || !validDir(dir) || !validName(name) {
+		return nil, "", fmt.Errorf("memory path %q is not <dir>/<file>.md (run mem reindex)", rel)
+	}
+	info, err := os.Stat(filepath.Join(s.WikiRoot, dir))
+	if err != nil {
+		return nil, "", fmt.Errorf("memory path %q: %w (run mem reindex)", rel, err)
+	}
+	if !info.IsDir() {
+		return nil, "", fmt.Errorf("memory path %q: %s is not a directory (run mem reindex)", rel, dir)
 	}
 	repo, err := wiki.OpenRepo(s.WikiRoot, dir)
 	if err != nil {
@@ -255,9 +294,24 @@ func (s *Service) now() time.Time {
 	return now().UTC().Truncate(time.Second)
 }
 
-func validate(typ, title, summary string) error {
+func validDir(dir string) bool {
+	return dir != "" && !strings.HasPrefix(dir, ".") && !strings.ContainsAny(dir, `/\`)
+}
+
+func validName(name string) bool {
+	return validDir(name) && strings.HasSuffix(name, ".md")
+}
+
+func validateType(typ string) error {
 	if !typePattern.MatchString(typ) {
 		return fmt.Errorf("invalid memory type %q: want lowercase letters, digits and dashes, starting with a letter, up to 32 characters (e.g. fact, decision, gotcha, preference, reference)", typ)
+	}
+	return nil
+}
+
+func validate(typ, title, summary string) error {
+	if err := validateType(typ); err != nil {
+		return err
 	}
 	if strings.TrimSpace(title) == "" {
 		return errors.New("memory title is required")

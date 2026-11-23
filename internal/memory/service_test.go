@@ -3,6 +3,8 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -458,5 +460,209 @@ func TestSaveTitleWithoutSlug(t *testing.T) {
 	}
 	if m.Path != billing.Dir+"/"+m.ID+".md" {
 		t.Errorf("Path = %q", m.Path)
+	}
+}
+
+func TestForgetRefusesFileHoldingAnotherMemory(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	in := defaultInput()
+	in.Title = "Note"
+	a, err := f.svc.Save(ctx, billing, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(f.svc.WikiRoot, filepath.FromSlash(a.Path))
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.svc.Save(ctx, billing, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Path != a.Path {
+		t.Fatalf("setup: second save path %q, want reuse of %q", b.Path, a.Path)
+	}
+
+	err = f.svc.Forget(ctx, a.ID)
+	if err == nil || !strings.Contains(err.Error(), "mem reindex") {
+		t.Fatalf("Forget(a) err = %v, want error suggesting mem reindex", err)
+	}
+	if d := parseFile(t, file); d.ID != b.ID {
+		t.Errorf("file now holds %s, want %s", d.ID, b.ID)
+	}
+	if _, err := f.svc.Store.GetMemory(ctx, a.ID); err != nil {
+		t.Errorf("row of a removed: %v", err)
+	}
+	if _, err := f.svc.Store.GetMemory(ctx, b.ID); err != nil {
+		t.Errorf("row of b removed: %v", err)
+	}
+	dir := filepath.Join(f.svc.WikiRoot, billing.Dir)
+	if got := gitOut(t, dir, "log", "-1", "--format=%s"); got != "mem: save "+b.ID+" Note" {
+		t.Errorf("last commit = %q", got)
+	}
+}
+
+func TestForgetToleratesMissingFile(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	m, err := f.svc.Save(ctx, billing, defaultInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(f.svc.WikiRoot, filepath.FromSlash(m.Path))); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Forget(ctx, m.ID); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if _, err := f.svc.Store.GetMemory(ctx, m.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("row survived: %v", err)
+	}
+	dir := filepath.Join(f.svc.WikiRoot, billing.Dir)
+	if got := gitOut(t, dir, "ls-files"); got != "" {
+		t.Errorf("tracked files = %q", got)
+	}
+}
+
+func TestUpdateAndForgetRejectInvalidPath(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if err := os.MkdirAll(filepath.Join(f.svc.WikiRoot, "dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(filepath.Dir(f.svc.WikiRoot), "x.md")
+	gitignore := filepath.Join(f.svc.WikiRoot, "dir", ".gitignore")
+	for _, p := range []string{outside, gitignore} {
+		if err := os.WriteFile(p, []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	title := "changed"
+	for i, rel := range []string{"../x.md", "a/b/c.md", "dir/.gitignore", "x.md", "dir/notes.txt"} {
+		id := fmt.Sprintf("m-00000000000%d", i)
+		if err := f.svc.Store.UpsertMemory(ctx, store.Memory{ID: id, Project: billing.Key, Type: "fact", Title: "t", Summary: "s", Path: rel}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.svc.Update(ctx, id, Patch{Title: &title}); err == nil {
+			t.Errorf("Update with path %q succeeded", rel)
+		}
+		if err := f.svc.Forget(ctx, id); err == nil {
+			t.Errorf("Forget with path %q succeeded", rel)
+		}
+		if _, err := f.svc.Store.GetMemory(ctx, id); err != nil {
+			t.Errorf("row with path %q removed: %v", rel, err)
+		}
+	}
+	for _, p := range []string{outside, gitignore} {
+		if b, err := os.ReadFile(p); err != nil || string(b) != "keep" {
+			t.Errorf("%s = %q, %v", p, b, err)
+		}
+	}
+	for _, p := range []string{filepath.Join(f.svc.WikiRoot, "a"), filepath.Join(f.svc.WikiRoot, "..", ".git"), filepath.Join(f.svc.WikiRoot, "dir", ".git")} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s created: %v", p, err)
+		}
+	}
+}
+
+func TestUpdateAndForgetWithMissingDir(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	m := store.Memory{ID: "m-0000000000aa", Project: billing.Key, Type: "fact", Title: "t", Summary: "s", Path: "gone-abc123/x.md"}
+	if err := f.svc.Store.UpsertMemory(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	title := "changed"
+	if _, err := f.svc.Update(ctx, m.ID, Patch{Title: &title}); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Update err = %v, want ErrNotExist", err)
+	}
+	if err := f.svc.Forget(ctx, m.ID); err != nil {
+		t.Errorf("Forget: %v", err)
+	}
+	if _, err := f.svc.Store.GetMemory(ctx, m.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("row survived: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.svc.WikiRoot, "gone-abc123")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("dir created: %v", err)
+	}
+}
+
+func TestSaveRemovesFileWhenCommitFails(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if _, err := f.svc.Save(ctx, billing, defaultInput()); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(f.svc.WikiRoot, billing.Dir)
+	if err := os.RemoveAll(filepath.Join(dir, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in := defaultInput()
+	in.Title = "Orphan candidate"
+	if _, err := f.svc.Save(ctx, billing, in); err == nil {
+		t.Fatal("Save with broken repo succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "orphan-candidate.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("orphan file left: %v", err)
+	}
+}
+
+func TestReindexSkipsInvalidType(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if _, err := f.svc.Save(ctx, billing, defaultInput()); err != nil {
+		t.Fatal(err)
+	}
+	bad := wiki.Marshal(wiki.Doc{ID: "m-0000000000bb", Type: "Not Valid", Title: "Bad type", Summary: "s", Project: billing.Key})
+	if err := os.WriteFile(filepath.Join(f.svc.WikiRoot, billing.Dir, "bad-type.md"), bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.svc.Reindex(ctx)
+	if err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+	if rep.Indexed != 1 || len(rep.Skipped) != 1 || !strings.HasPrefix(rep.Skipped[0], billing.Dir+"/bad-type.md: ") || !strings.Contains(rep.Skipped[0], "type") {
+		t.Errorf("report = %+v", rep)
+	}
+}
+
+func TestSaveDuringReindexEndsUpInIndex(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if _, err := f.svc.Save(ctx, billing, defaultInput()); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		m   store.Memory
+		err error
+	}
+	done := make(chan result, 1)
+	f.svc.beforeReplace = func() {
+		go func() {
+			in := defaultInput()
+			in.Title = "Saved during reindex"
+			m, err := f.svc.Save(ctx, billing, in)
+			done <- result{m, err}
+		}()
+		select {
+		case r := <-done:
+			done <- r
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	rep, err := f.svc.Reindex(ctx)
+	if err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("concurrent Save: %v", r.err)
+	}
+	if _, err := f.svc.Store.GetMemory(ctx, r.m.ID); err != nil {
+		t.Errorf("memory saved during reindex missing from index (reindex report %+v): %v", rep, err)
 	}
 }

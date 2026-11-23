@@ -11,6 +11,7 @@ var version = "dev"
 const usage = `usage: mem <command>
 
 commands:
+  hook      record a Claude Code hook event read from stdin
   version   print the mem version
 `
 
@@ -24,6 +25,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
+	case "hook":
+		return runHook(args[1:], stdin, stdout, stderr)
 	case "version":
 		fmt.Fprintf(stdout, "mem %s\n", version)
 		return 0

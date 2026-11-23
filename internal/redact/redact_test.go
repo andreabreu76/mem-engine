@@ -142,6 +142,40 @@ func TestCleanAWSQuotedKey(t *testing.T) {
 	}
 }
 
+func TestCleanConnEmptyUser(t *testing.T) {
+	r := mustNew(t, nil, false)
+	in := "redis://:" + "pw12" + "@cache.example.com:6379/0"
+	if got, want := r.Clean(in), "redis://:[REDACTED:conn]@cache.example.com:6379/0"; got != want {
+		t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+	}
+}
+
+func TestCleanAWSEscapedJSON(t *testing.T) {
+	r := mustNew(t, nil, false)
+	value := strings.Repeat("w", 40)
+	in := `"{\"aws_secret_access_key\":\"` + value + `\",\"region\":\"x\"}"`
+	got := r.Clean(in)
+	if strings.Contains(got, value) {
+		t.Errorf("Clean(%q) = %q, value kept", in, got)
+	}
+	if want := `"{\"aws_secret_access_key\":[REDACTED:aws],\"region\":\"x\"}"`; got != want {
+		t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+	}
+}
+
+func TestCleanPGPBlock(t *testing.T) {
+	r := mustNew(t, nil, false)
+	body := strings.Repeat("P", 64)
+	begin := "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\n"
+	end := "\n-----END PGP PRIVATE KEY BLOCK-----"
+	if got := r.Clean("before " + begin + body + end + " after"); got != "before [REDACTED:pem] after" {
+		t.Errorf("closed: Clean = %q", got)
+	}
+	if got := r.Clean("before " + begin + body + "\nrest"); got != "before [REDACTED:pem]" {
+		t.Errorf("unclosed: Clean = %q", got)
+	}
+}
+
 func TestCleanLeavesPlainURL(t *testing.T) {
 	r := mustNew(t, nil, false)
 	in := "see https://example.com:8080/docs?a=b and http://localhost:3000/"

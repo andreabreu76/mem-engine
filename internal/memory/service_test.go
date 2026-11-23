@@ -630,6 +630,35 @@ func TestReindexSkipsInvalidType(t *testing.T) {
 	}
 }
 
+func TestReindexSkipsInvalidID(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if _, err := f.svc.Save(ctx, billing, defaultInput()); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"o-5", "m-0000000000BB", "m-00000000000", "m-0000000000bb0", "x-0000000000bb"} {
+		doc := wiki.Marshal(wiki.Doc{ID: id, Type: "fact", Title: "Bad id", Summary: "s", Project: billing.Key})
+		if err := os.WriteFile(filepath.Join(f.svc.WikiRoot, billing.Dir, fmt.Sprintf("bad-id-%d.md", i)), doc, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := f.svc.Reindex(ctx)
+	if err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+	if rep.Indexed != 1 || len(rep.Skipped) != 5 {
+		t.Fatalf("report = %+v", rep)
+	}
+	for _, sk := range rep.Skipped {
+		if !strings.HasPrefix(sk, billing.Dir+"/bad-id-") || !strings.Contains(sk, "id") {
+			t.Errorf("skipped = %q", sk)
+		}
+	}
+	if _, err := f.svc.Store.GetMemory(ctx, "o-5"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetMemory(o-5) = %v, want ErrNotFound", err)
+	}
+}
+
 func TestSaveDuringReindexEndsUpInIndex(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)

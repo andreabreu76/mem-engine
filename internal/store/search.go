@@ -26,7 +26,7 @@ const (
 	summaryMaxChars     = 100
 )
 
-var queryToken = regexp.MustCompile(`[\p{L}\p{N}_]+`)
+var queryToken = regexp.MustCompile(`[\p{L}\p{M}\p{N}_]+`)
 
 type Scope struct{ Projects []string }
 
@@ -108,7 +108,7 @@ func (s *Store) Search(ctx context.Context, p SearchParams) ([]Hit, error) {
 	for _, c := range []corpus{memoryCorpus, observationCorpus} {
 		found, err := s.searchCorpus(ctx, c, fts, p, perCorpus, now)
 		if err != nil {
-			return nil, fmt.Errorf("search %ss: %w", c.kind, err)
+			return nil, fmt.Errorf("search %s: %w", c.fts, err)
 		}
 		hits = append(hits, found...)
 	}
@@ -147,10 +147,19 @@ func (s *Store) searchCorpus(ctx context.Context, c corpus, fts string, p Search
 	if err != nil {
 		return nil, err
 	}
-	if fts != "" {
-		for i := range hits {
-			hits[i].Score = -hits[i].Score * c.weight * recency(now, hits[i].At)
+	if fts == "" {
+		return hits, nil
+	}
+	best := 0.0
+	for _, h := range hits {
+		best = max(best, -h.Score)
+	}
+	for i := range hits {
+		relevance := 0.0
+		if best > 0 {
+			relevance = -hits[i].Score / best
 		}
+		hits[i].Score = relevance * c.weight * recency(now, hits[i].At)
 	}
 	return hits, nil
 }

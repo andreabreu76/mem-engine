@@ -444,3 +444,77 @@ func TestGetRespectsMaxBytes(t *testing.T) {
 		t.Errorf("default cap: len=%d truncated=%v", len(items[0].Body), items[0].Truncated)
 	}
 }
+
+func TestSearchMemoryAboveObservationWhenTermCommonInMemories(t *testing.T) {
+	ctx := context.Background()
+	s := openSearchTemp(t)
+	at := searchNow.Add(-time.Hour)
+	addMemory(t, s, "m-1", "/p/a", "deploy checklist", "deploy body", "", at)
+	addMemory(t, s, "m-2", "/p/a", "deploy rollback", "deploy notes", "", at)
+	addMemory(t, s, "m-3", "/p/a", "deploy window", "deploy schedule", "", at)
+	obs := addObservation(t, s, "s1", "/p/a", "deploy run", "deploy output", at)
+	for i := 0; i < 5; i++ {
+		addObservation(t, s, "s1", "/p/a", "unrelated event", "nothing to see here", at)
+	}
+
+	hits, err := s.Search(ctx, SearchParams{Query: "deploy", Scope: CurrentScope("/p/a")})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 4 {
+		t.Fatalf("ids = %v", hitIDs(hits))
+	}
+	if hits[0].Kind != "memory" {
+		t.Errorf("first hit = %s (%s), want a memory above %s; ids = %v", hits[0].ID, hits[0].Kind, obs, hitIDs(hits))
+	}
+	if hits[3].ID != obs {
+		t.Errorf("ids = %v, want observation %s last", hitIDs(hits), obs)
+	}
+}
+
+func TestSearchCombiningMarks(t *testing.T) {
+	ctx := context.Background()
+	s := openSearchTemp(t)
+	addMemory(t, s, "m-1", "/p/a", "persistência", "decisão de não usar ORM", "", searchNow)
+	addMemory(t, s, "m-2", "/p/a", "naval", "o barco", "", searchNow)
+
+	nfd := "na" + "̃" + "o"
+	if got := FTSQuery(nfd); got != `"`+nfd+`"` {
+		t.Errorf("FTSQuery(NFD) = %q, want a single token", got)
+	}
+	for _, q := range []string{"nao", nfd} {
+		hits, err := s.Search(ctx, SearchParams{Query: q, Scope: CurrentScope("/p/a")})
+		if err != nil {
+			t.Fatalf("Search(%q): %v", q, err)
+		}
+		if got := hitIDs(hits); !reflect.DeepEqual(got, []string{"m-1"}) {
+			t.Errorf("Search(%q) = %v, want [m-1]", q, got)
+		}
+	}
+}
+
+func TestTimelineUserMemoryHidesOtherProjectSession(t *testing.T) {
+	ctx := context.Background()
+	s := openSearchTemp(t)
+	base := searchNow.Add(-time.Hour)
+	var visible []string
+	for i := 0; i < 3; i++ {
+		visible = append(visible, addObservation(t, s, "sx", "/p/a", "step", "body", base.Add(time.Duration(2*i)*time.Minute)))
+		addObservation(t, s, "sx", "/p/b", "secret", "body", base.Add(time.Duration(2*i+1)*time.Minute))
+	}
+	addMemory(t, s, "m-user", "user", "preference", "body", "sx", base.Add(3*time.Minute+30*time.Second))
+
+	hits, err := s.Timeline(ctx, "m-user", 5, 5, CurrentScope("/p/a"))
+	if err != nil {
+		t.Fatalf("Timeline: %v", err)
+	}
+	for _, h := range hits {
+		if h.Project == "/p/b" {
+			t.Errorf("Timeline leaked %s from /p/b", h.ID)
+		}
+	}
+	want := []string{visible[0], visible[1], "m-user", visible[2]}
+	if got := hitIDs(hits); !reflect.DeepEqual(got, want) {
+		t.Errorf("ids = %v, want %v", got, want)
+	}
+}

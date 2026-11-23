@@ -44,6 +44,7 @@ type Service struct {
 
 var (
 	typePattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	idPattern     = regexp.MustCompile(`^m-[0-9a-f]{12}$`)
 	dirHashSuffix = regexp.MustCompile(`-[0-9a-f]{6}$`)
 )
 
@@ -245,6 +246,9 @@ func readDoc(file string) (wiki.Doc, error) {
 	}
 	if doc.Project == "" {
 		return wiki.Doc{}, errors.New("wiki: frontmatter without project")
+	}
+	if !idPattern.MatchString(doc.ID) {
+		return wiki.Doc{}, fmt.Errorf("wiki: invalid id %q, want m- followed by 12 hex digits", doc.ID)
 	}
 	if err := validateType(doc.Type); err != nil {
 		return wiki.Doc{}, err

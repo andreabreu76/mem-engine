@@ -74,6 +74,22 @@ ok    mcp             mem-engine registered with claude
 
 Checks: `binary` (the `mem` on `PATH` is the one running), `config` (`config.toml` parses), `data-dir` (writable), `database` (opens, schema version, FTS5), `spool` (events waiting to be written), `capture-errors` (hook failures in the last 24 hours), `hooks` (registered and up to date) and `mcp` (`claude mcp get mem-engine` succeeds, skipped when `claude` is not on `PATH`). `mem doctor` never creates the data directory or the database. It exits with 1 only when a check fails.
 
+## Benchmark
+
+```sh
+mem bench [path] [--native file]
+```
+
+Compares what Claude Code's native memory loads at the start of every session with the handoff mem-engine injects instead. The native side is the project's `MEMORY.md` under `~/.claude/projects/<encoded project path>/memory/`, counted the way Claude Code loads it: the first 200 lines, at most 25 KB. The mem-engine side is the handoff a new session of the project would receive now (at most 1200 bytes). Tokens are estimated as bytes / 4. `path` defaults to the working directory and `--native` points to another `MEMORY.md`.
+
+```
+native MEMORY.md: 18432 bytes loaded (~4608 tokens)
+mem-engine handoff: 612 bytes (~153 tokens)
+saving: ~4455 tokens per session (97%)
+```
+
+When the project has no `MEMORY.md`, only the handoff line is printed. A handoff larger than the native file shows a negative saving. The native file is read locally and nothing is sent anywhere, and `mem bench` never creates the data directory or the database: without `mem.db` it measures the minimal handoff of an empty project.
+
 ## Configuration
 
 Data lives in `$MEM_ENGINE_HOME`, or `~/.mem-engine` when the variable is unset:

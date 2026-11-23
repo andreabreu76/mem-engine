@@ -17,6 +17,7 @@ var runCommand = func(ctx context.Context, name string, args ...string) ([]byte,
 const usage = `usage: mem <command>
 
 commands:
+  bench     compare the native MEMORY.md load with the mem-engine handoff ([path] [--native file])
   doctor    check the binary, data dir, database, spool, capture errors and hooks
   gc        delete observations older than retention_days
   hook      record a Claude Code hook event read from stdin
@@ -36,6 +37,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
+	case "bench":
+		return runBench(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
 	case "gc":

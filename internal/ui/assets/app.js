@@ -2,7 +2,6 @@
 
 const POLL_MS = 2000;
 const HEALTH_MS = 10000;
-const FEED_PAGE = 200;
 const FEED_KEEP = 300;
 
 const params = new URLSearchParams(location.search);
@@ -12,6 +11,7 @@ const rest = params.toString();
 history.replaceState(null, "", location.pathname + (rest ? "?" + rest : "") + location.hash);
 
 const $ = (id) => document.getElementById(id);
+const rowHits = new WeakMap();
 const state = {
   lastId: 0,
   seeded: false,
@@ -84,6 +84,7 @@ function row(hit, current) {
   const button = el("button", "row");
   button.type = "button";
   button.dataset.id = hit.id;
+  rowHits.set(button, hit);
   if (current) button.setAttribute("aria-current", "true");
   const head = el("span", "row-head");
   head.append(el("span", "type type-" + hit.kind, hit.type || hit.kind), el("span", "title", hit.title || hit.id));
@@ -119,7 +120,9 @@ function schedule(delay) {
 async function fetchFeed() {
   if (state.seeded) return api("GET", "/api/feed", { after: state.lastId, project: project() });
   const recent = await api("GET", "/api/search", { project: project() });
-  return recent.filter((h) => h.kind === "observation").sort((a, b) => numericId(a.id) - numericId(b.id));
+  const observations = recent.filter((h) => h.kind === "observation");
+  if (observations.length === 0) return api("GET", "/api/feed", { after: 0, project: project() });
+  return observations.sort((a, b) => numericId(a.id) - numericId(b.id));
 }
 
 async function tick() {
@@ -130,11 +133,9 @@ async function tick() {
   try {
     const hits = await fetchFeed();
     if (generation === state.generation) {
-      const full = state.seeded && hits.length >= FEED_PAGE;
       state.seeded = true;
       prependFeed(hits);
       $("feed-state").textContent = "live";
-      if (full) delay = 0;
     }
   } catch (err) {
     if (generation === state.generation) $("feed-state").textContent = "error: " + err.message;
@@ -223,8 +224,10 @@ async function openItem(id) {
     state.itemProject = scope;
     renderItem(data.item, data.timeline);
     showStatus("");
+    return true;
   } catch (err) {
     showStatus("Could not open " + id + ": " + err.message);
+    return false;
   }
 }
 
@@ -240,7 +243,7 @@ function renderItem(item, timeline) {
   $("item-files").replaceChildren(...(item.files || []).map((f) => el("li", "", f)));
   $("item-body").textContent = item.body || item.summary || "";
   $("item-truncated").hidden = !item.truncated;
-  $("item-edit").hidden = item.kind !== "memory";
+  $("item-edit").hidden = !editable(item);
   $("timeline").replaceChildren(...(timeline || []).map((h) => row(h, h.id === item.id)));
 }
 
@@ -249,9 +252,21 @@ function closeItem() {
   $("item-panel").hidden = true;
 }
 
+function editable(item) {
+  return Boolean(item) && item.kind === "memory" && !item.truncated;
+}
+
+function refreshRows(m) {
+  for (const node of document.querySelectorAll(".row")) {
+    if (node.dataset.id !== m.id) continue;
+    const hit = { ...rowHits.get(node), type: m.type, title: m.title, summary: m.summary };
+    node.parentElement.replaceWith(row(hit, node.getAttribute("aria-current") === "true"));
+  }
+}
+
 function startEdit() {
   const item = state.item;
-  if (!item || item.kind !== "memory") return;
+  if (!editable(item)) return;
   $("edit-type").value = item.type || "";
   $("edit-title").value = item.title || "";
   $("edit-summary").value = item.summary || "";
@@ -264,7 +279,10 @@ function startEdit() {
 async function saveEdit(event) {
   event.preventDefault();
   const item = state.item;
-  if (!item) return;
+  if (!editable(item)) {
+    showStatus("This memory is too large to edit here, use the update tool.");
+    return;
+  }
   const patch = {
     type: $("edit-type").value.trim(),
     title: $("edit-title").value.trim(),
@@ -272,13 +290,15 @@ async function saveEdit(event) {
     tags: $("edit-tags").value.split(",").map((t) => t.trim()).filter(Boolean),
     body: $("edit-body").value,
   };
+  let saved;
   try {
-    await api("PUT", "/api/memory/" + encodeURIComponent(item.id), { project: state.itemProject }, patch);
-    await openItem(item.id);
-    showStatus("Saved " + item.id + ".", true);
+    saved = await api("PUT", "/api/memory/" + encodeURIComponent(item.id), { project: state.itemProject }, patch);
   } catch (err) {
     showStatus("Save failed: " + err.message);
+    return;
   }
+  refreshRows(saved);
+  if (await openItem(item.id)) showStatus("Saved " + item.id + ".", true);
 }
 
 async function deleteItem() {

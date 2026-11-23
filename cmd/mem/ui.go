@@ -73,7 +73,7 @@ func runUI(args []string, stdout, stderr io.Writer) int {
 
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(*port))
 	ln, err := net.Listen("tcp4", addr)
-	if errors.Is(err, syscall.EADDRINUSE) {
+	if isAddrInUse(err) {
 		fmt.Fprintf(stderr, "mem ui: port %d is already in use on 127.0.0.1, choose another with --port or ui_port in config.toml\n", *port)
 		return 1
 	}

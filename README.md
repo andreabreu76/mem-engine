@@ -102,14 +102,14 @@ Serves a local web viewer and prints the address to open:
 mem ui: http://127.0.0.1:47600/?token=<random token>
 ```
 
-The viewer listens on `127.0.0.1` only, on `ui_port` (47600 by default) or `--port`. The token is new on every run and every request needs it, requests with another `Host` are refused, and edits and deletes also need the page's own `Origin`. The page takes the token from the address bar into memory and removes it from the URL, so after a reload open the printed URL again. When the port is taken, `mem ui` exits with an error; stop it with Ctrl+C.
+The viewer listens on `127.0.0.1` only, on `ui_port` (47600 by default) or `--port`. The token is new on every run and the page and the API need it (only the static script and stylesheet are served without it), requests with another `Host` are refused, and edits and deletes also need the page's own `Origin`. The page takes the token from the address bar into memory and removes it from the URL, so after a reload open the printed URL again. When the port is taken, `mem ui` exits with an error; stop it with Ctrl+C.
 
 What it shows:
 
 - a live feed of captured observations, refreshed every 2 seconds while the tab is visible;
 - search over memories and observations, filtered by project, type and date;
 - an item page with the full body and the session timeline around it;
-- an edit form for memories (type, title, summary, tags, body), saved to the wiki like `update`, and delete buttons for memories and observations, both asking for confirmation.
+- an edit form for memories (type, title, summary, tags, body), saved to the wiki like `update` (a memory whose body is too large to show in full is not editable here), and delete buttons for memories and observations, both asking for confirmation.
 
 The project selector starts at "All projects"; pick one to narrow the feed and the search to that project plus `user` memories.
 

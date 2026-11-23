@@ -83,7 +83,7 @@ func TestImportCommandProject(t *testing.T) {
 		t.Fatalf("code = %d, stderr = %q", code, errb.String())
 	}
 	if want := "imported 4, skipped 0\nunresolved [[missing]] in broken-link.md\n"; out.String() != want {
-		t.Errorf("stdout = %q, want %q", out.String(), want)
+		t.Errorf("stdout = %q, want %q, stderr = %q", out.String(), want, errb.String())
 	}
 	if errb.Len() != 0 {
 		t.Errorf("stderr = %q", errb.String())
@@ -96,7 +96,13 @@ func TestImportCommandProject(t *testing.T) {
 	if code := run([]string{"import", "--project=billing-api", src}, nil, &out, &errb); code != 0 {
 		t.Fatalf("rerun by name: code = %d, stderr = %q", code, errb.String())
 	}
-	if want := "imported 0, skipped 4\n"; out.String() != want {
+	want := "imported 0, skipped 4\n" +
+		"unresolved [[missing]] in broken-link.md\n" +
+		"broken-link.md: skipped, already imported\n" +
+		"deploy-window.md: skipped, already imported\n" +
+		"editor-preference.md: skipped, already imported\n" +
+		"retry-policy.md: skipped, already imported\n"
+	if out.String() != want {
 		t.Errorf("rerun stdout = %q, want %q", out.String(), want)
 	}
 }
@@ -115,7 +121,7 @@ func TestImportCommandDefaultsToUserForHomeMemoryDir(t *testing.T) {
 	}
 	want := "imported 4, skipped 1\nunresolved [[missing]] in broken-link.md\nplain.md: skipped, no frontmatter\n"
 	if out.String() != want {
-		t.Errorf("stdout = %q, want %q", out.String(), want)
+		t.Errorf("stdout = %q, want %q, stderr = %q", out.String(), want, errb.String())
 	}
 	if n := countMemories(t, home, project.User.Key); n != 4 {
 		t.Errorf("user memories = %d, want 4", n)
@@ -148,7 +154,7 @@ func TestImportCommandDryRun(t *testing.T) {
 		"  broken link\n  deploy window\n  editor preference\n  retry policy\n" +
 		"unresolved [[missing]] in broken-link.md\n"
 	if out.String() != want {
-		t.Errorf("stdout = %q, want %q", out.String(), want)
+		t.Errorf("stdout = %q, want %q, stderr = %q", out.String(), want, errb.String())
 	}
 	entries, err := os.ReadDir(home)
 	if err != nil {
@@ -164,6 +170,43 @@ func TestImportCommandFatal(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"import", filepath.Join(t.TempDir(), "absent"), "--user"}, nil, &out, &errb); code != 1 {
 		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.HasPrefix(errb.String(), "mem import: ") {
+		t.Errorf("stderr = %q", errb.String())
+	}
+}
+
+func TestImportCommandFatalPrintsPartialReport(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	home := importHome(t)
+	src := copyNative(t, filepath.Join(t.TempDir(), "memory"))
+	first := t.TempDir()
+	b, err := os.ReadFile(filepath.Join(src, "broken-link.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(first, "broken-link.md"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"import", first, "--user"}, nil, &out, &errb); code != 0 {
+		t.Fatalf("first import: code = %d, stderr = %q", code, errb.String())
+	}
+	userWiki := filepath.Join(home, "wiki", project.User.Dir)
+	if err := os.Chmod(userWiki, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(userWiki, 0o700) })
+
+	out.Reset()
+	errb.Reset()
+	if code := run([]string{"import", src, "--user"}, nil, &out, &errb); code != 1 {
+		t.Fatalf("code = %d, want 1, stdout = %q", code, out.String())
+	}
+	if want := "imported 0, skipped 1\nbroken-link.md: skipped, already imported\n"; out.String() != want {
+		t.Errorf("stdout = %q, want %q, stderr = %q", out.String(), want, errb.String())
 	}
 	if !strings.HasPrefix(errb.String(), "mem import: ") {
 		t.Errorf("stderr = %q", errb.String())

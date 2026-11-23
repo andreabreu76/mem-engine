@@ -131,7 +131,7 @@ mem import <dir> --project billing-api --dry-run
 
 `--project` takes a path (resolved like any other project, groups and aliases included) or the name or key of a project mem-engine already knows. `--user` imports into the user scope, visible in every project. Without either flag, `mem import` uses the user scope only when `<dir>` is the native memory directory of your home; any other directory needs `--project` or `--user`. `--dry-run` lists the titles that would be imported and the target, and writes nothing.
 
-Every `*.md` except `MEMORY.md` becomes one memory: the title is the native `name` with dashes turned into spaces, the summary is the `description`, the type is the native type (`metadata.type` or a top-level `type`) kept as is, the body is copied unchanged and the memory is tagged `imported`. Links such as `[[deploy-window]]` are rewritten to the new memory id when they point to a memory imported in the same run or in an earlier one into the same target; links inside fenced code blocks are left alone.
+Every `*.md` except `MEMORY.md` becomes one memory: the title is the native `name` with dashes turned into spaces, the summary is the `description`, the type is the native type (`metadata.type` or a top-level `type`) kept as is, the body is copied unchanged and the memory is tagged `imported` and `native:<source file>`. Two files with the same `name` are both imported, the second one under a suffixed wiki file, with a note. Links such as `[[deploy-window]]` (by `name` or by source file name) are rewritten to the memory id when they point to a memory imported into the same target, in this run or an earlier one; with duplicate names they point to the first source file in name order. Each run also rewrites links in memories imported earlier that can be resolved now. Links inside fenced code blocks are left alone.
 
 ```
 imported 12, skipped 1
@@ -139,7 +139,7 @@ unresolved [[old-runbook]] in deploy-window.md
 notes.md: skipped, no frontmatter
 ```
 
-Files without frontmatter, without a `name`, without a `description` or with a type mem-engine does not accept are skipped with a note. Running the import again is safe: a memory already imported into the target (tag `imported`, same title) is skipped. Exit code 0 on success, 1 on error, 2 on bad arguments.
+Files without frontmatter, without a `name`, without a `description` or with a type mem-engine does not accept are skipped with a note. Running the import again is safe: a source file already imported into the target (tag `native:<source file>`) is skipped with the note `already imported`, so a run that stopped halfway is finished by running it again. Exit code 0 on success, 1 on error (after printing what was imported until then), 2 on bad arguments.
 
 Once the import looks right, turn off the native memory so Claude Code stops loading `MEMORY.md` next to the mem-engine handoff. The next release adds `mem setup --disable-native-memory` for that step.
 

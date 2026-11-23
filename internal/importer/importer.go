@@ -32,12 +32,18 @@ type Report struct {
 }
 
 const (
-	indexFile   = "MEMORY.md"
-	importedTag = "imported"
-	delimiter   = "---"
+	indexFile       = "MEMORY.md"
+	importedTag     = "imported"
+	nativeTagPrefix = "native:"
+	delimiter       = "---"
 )
 
-var linkPattern = regexp.MustCompile(`\[\[([^\[\]\n]+)\]\]`)
+var saveMemory = (*memory.Service).Save
+
+var (
+	linkPattern = regexp.MustCompile(`\[\[([^\[\]\n]+)\]\]`)
+	idPattern   = regexp.MustCompile(`^m-[0-9a-f]{12}$`)
+)
 
 type nativeFrontmatter struct {
 	Name        string `yaml:"name"`
@@ -48,9 +54,9 @@ type nativeFrontmatter struct {
 	} `yaml:"metadata"`
 }
 
-type entry struct {
-	file, id string
-	in       memory.Input
+type source struct {
+	file, id, title, body string
+	fresh                 bool
 }
 
 func Run(ctx context.Context, svc *memory.Service, st *store.Store, o Options) (Report, error) {
@@ -59,70 +65,84 @@ func Run(ctx context.Context, svc *memory.Service, st *store.Store, o Options) (
 	if err != nil {
 		return rep, fmt.Errorf("import: %w", err)
 	}
-	existing, err := importedIDs(ctx, st, o.Target.Key)
+	sources, err := importedSources(ctx, st, o.Target.Key)
 	if err != nil {
 		return rep, fmt.Errorf("import: %w", err)
 	}
-	planned := map[string]*entry{}
-	var order []*entry
+	done := map[string]bool{}
+	for _, s := range sources {
+		done[s.file] = true
+	}
 	for _, file := range files {
+		if done[file] {
+			rep.Skipped++
+			rep.Notes = append(rep.Notes, file+": skipped, already imported")
+			continue
+		}
 		b, err := os.ReadFile(filepath.Join(o.Dir, file))
 		if err != nil {
 			return rep, fmt.Errorf("import: %w", err)
 		}
 		in, err := parseNative(b)
-		if err == nil {
-			if prev, dup := planned[in.Title]; dup {
-				err = fmt.Errorf("name %q already used by %s", in.Title, prev.file)
-			}
-		}
 		if err != nil {
 			rep.Skipped++
 			rep.Notes = append(rep.Notes, file+": skipped, "+err.Error())
 			continue
 		}
-		if _, done := existing[in.Title]; done {
-			rep.Skipped++
-			continue
-		}
-		e := &entry{file: file, in: in}
-		planned[in.Title] = e
-		order = append(order, e)
-	}
-	for _, e := range order {
+		in.Tags = append(in.Tags, nativeTagPrefix+file)
+		s := &source{file: file, title: in.Title, body: in.Body, fresh: true}
 		if !o.DryRun {
-			m, err := svc.Save(ctx, o.Target, e.in)
+			m, err := saveMemory(svc, ctx, o.Target, in)
 			if err != nil {
-				return rep, fmt.Errorf("import %s: %w", e.file, err)
+				return rep, fmt.Errorf("import %s: %w", file, err)
 			}
-			e.id = m.ID
+			s.id = m.ID
 		}
 		rep.Imported++
-		rep.Titles = append(rep.Titles, e.in.Title)
+		rep.Titles = append(rep.Titles, in.Title)
+		sources = append(sources, s)
 	}
+	slices.SortStableFunc(sources, func(a, b *source) int { return strings.Compare(a.file, b.file) })
+	names, notes := nameIndex(sources)
+	rep.Notes = append(rep.Notes, notes...)
 	resolve := func(name string) (string, bool) {
-		title := titleOf(name)
-		if id, ok := existing[title]; ok {
-			return id, true
+		s, ok := names[titleOf(name)]
+		if !ok {
+			return "", false
 		}
-		if e, ok := planned[title]; ok {
-			return e.id, true
-		}
-		return "", false
+		return s.id, true
 	}
-	for _, e := range order {
-		body, missing := rewriteLinks(e.in.Body, resolve)
+	for _, s := range sources {
+		body, missing := rewriteLinks(s.body, resolve)
 		for _, name := range missing {
-			rep.Unresolved = append(rep.Unresolved, "[["+name+"]] in "+e.file)
+			rep.Unresolved = append(rep.Unresolved, "[["+name+"]] in "+s.file)
 		}
-		if o.DryRun || body == e.in.Body {
+		if o.DryRun || body == s.body {
 			continue
 		}
-		if _, err := svc.Update(ctx, e.id, memory.Patch{Body: &body}); err != nil {
-			return rep, fmt.Errorf("import %s: %w", e.file, err)
+		if _, err := svc.Update(ctx, s.id, memory.Patch{Body: &body}); err != nil {
+			return rep, fmt.Errorf("import %s: %w", s.file, err)
 		}
 	}
 	return rep, nil
+}
+
+func nameIndex(sources []*source) (map[string]*source, []string) {
+	names := map[string]*source{}
+	var notes []string
+	for _, s := range sources {
+		for _, key := range []string{titleOf(strings.TrimSuffix(s.file, ".md")), s.title} {
+			first, taken := names[key]
+			if !taken {
+				names[key] = s
+				continue
+			}
+			if first != s && s.fresh && key == s.title {
+				notes = append(notes, fmt.Sprintf("%s: name %q is also used by %s, links to it resolve to %s", s.file, s.title, first.file, first.file))
+			}
+		}
+	}
+	return names, notes
 }
 
 func markdownFiles(dir string) ([]string, error) {
@@ -140,21 +160,29 @@ func markdownFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-func importedIDs(ctx context.Context, st *store.Store, key string) (map[string]string, error) {
-	ids := map[string]string{}
+func importedSources(ctx context.Context, st *store.Store, key string) ([]*source, error) {
 	if st == nil {
-		return ids, nil
+		return nil, nil
 	}
 	ms, err := st.ListMemories(ctx, key)
 	if err != nil {
 		return nil, err
 	}
+	var sources []*source
 	for _, m := range ms {
-		if _, seen := ids[m.Title]; !seen && slices.Contains(m.Tags, importedTag) {
-			ids[m.Title] = m.ID
+		if !slices.Contains(m.Tags, importedTag) {
+			continue
 		}
+		file := m.ID
+		for _, tag := range m.Tags {
+			if f, ok := strings.CutPrefix(tag, nativeTagPrefix); ok {
+				file = f
+				break
+			}
+		}
+		sources = append(sources, &source{file: file, id: m.ID, title: m.Title, body: m.Body})
 	}
-	return ids, nil
+	return sources, nil
 }
 
 func parseNative(b []byte) (memory.Input, error) {
@@ -231,6 +259,9 @@ func rewriteLinks(body string, resolve func(string) (string, bool)) (string, []s
 		default:
 			line = linkPattern.ReplaceAllStringFunc(line, func(link string) string {
 				name := link[2 : len(link)-2]
+				if idPattern.MatchString(name) {
+					return link
+				}
 				if id, ok := resolve(name); ok {
 					return "[[" + id + "]]"
 				}

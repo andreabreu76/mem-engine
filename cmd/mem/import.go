@@ -34,25 +34,31 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	rep, target, err := importNative(a)
+	if err == nil || rep.Imported+rep.Skipped > 0 {
+		printImportReport(stdout, rep, target, a.dryRun)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "mem import: %v\n", err)
 		return 1
 	}
-	if a.dryRun {
-		fmt.Fprintf(stdout, "dry run: would import %d into %s, skip %d\n", rep.Imported, target.Key, rep.Skipped)
+	return 0
+}
+
+func printImportReport(w io.Writer, rep importer.Report, target project.Project, dryRun bool) {
+	if dryRun {
+		fmt.Fprintf(w, "dry run: would import %d into %s, skip %d\n", rep.Imported, target.Key, rep.Skipped)
 		for _, title := range rep.Titles {
-			fmt.Fprintf(stdout, "  %s\n", title)
+			fmt.Fprintf(w, "  %s\n", title)
 		}
 	} else {
-		fmt.Fprintf(stdout, "imported %d, skipped %d\n", rep.Imported, rep.Skipped)
+		fmt.Fprintf(w, "imported %d, skipped %d\n", rep.Imported, rep.Skipped)
 	}
 	for _, u := range rep.Unresolved {
-		fmt.Fprintf(stdout, "unresolved %s\n", u)
+		fmt.Fprintf(w, "unresolved %s\n", u)
 	}
 	for _, n := range rep.Notes {
-		fmt.Fprintln(stdout, n)
+		fmt.Fprintln(w, n)
 	}
-	return 0
 }
 
 func parseImportArgs(args []string) (importArgs, error) {

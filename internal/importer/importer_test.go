@@ -113,8 +113,8 @@ func TestImportPreservesTypeAndDescription(t *testing.T) {
 		if m.Type != w[0] || m.Summary != w[1] {
 			t.Errorf("%q: type %q summary %q, want %q %q", title, m.Type, m.Summary, w[0], w[1])
 		}
-		if !reflect.DeepEqual(m.Tags, []string{"imported"}) {
-			t.Errorf("%q: tags %v", title, m.Tags)
+		if wantTags := []string{"imported", "native:" + strings.ReplaceAll(title, " ", "-") + ".md"}; !reflect.DeepEqual(m.Tags, wantTags) {
+			t.Errorf("%q: tags %v, want %v", title, m.Tags, wantTags)
 		}
 	}
 	if b := got["deploy window"].Body; b != nativeBody(t, "deploy-window.md") {
@@ -191,8 +191,20 @@ func TestImportIsRerunnable(t *testing.T) {
 	e.run(t, Options{Dir: nativeDir, Target: billing})
 	before := e.byTitle(t, billing.Key)
 	rep := e.run(t, Options{Dir: nativeDir, Target: billing})
-	if rep.Imported != 0 || rep.Skipped != 4 || len(rep.Unresolved) != 0 {
+	if rep.Imported != 0 || rep.Skipped != 4 {
 		t.Errorf("rerun report = %+v, want Imported 0 Skipped 4", rep)
+	}
+	wantNotes := []string{
+		"broken-link.md: skipped, already imported",
+		"deploy-window.md: skipped, already imported",
+		"editor-preference.md: skipped, already imported",
+		"retry-policy.md: skipped, already imported",
+	}
+	if !reflect.DeepEqual(rep.Notes, wantNotes) {
+		t.Errorf("Notes = %q, want %q", rep.Notes, wantNotes)
+	}
+	if want := []string{"[[missing]] in broken-link.md"}; !reflect.DeepEqual(rep.Unresolved, want) {
+		t.Errorf("Unresolved = %q, want %q", rep.Unresolved, want)
 	}
 	if after := e.byTitle(t, billing.Key); !reflect.DeepEqual(after, before) {
 		t.Errorf("rerun changed memories:\n%v\n%v", before, after)
@@ -290,21 +302,92 @@ func TestImportSkipsInvalidFiles(t *testing.T) {
 	}
 }
 
-func TestImportSkipsDuplicateNames(t *testing.T) {
-	e := newEnv(t)
-	dir := t.TempDir()
-	for _, name := range []string{"a.md", "b.md"} {
-		content := "---\nname: same-name\ndescription: from " + name + "\ntype: project\n---\n\nbody\n"
+func writeFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestImportDuplicateNamesGetSuffix(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"a.md":     "---\nname: same-name\ndescription: from a.md\ntype: project\n---\n\nbody a\n",
+		"b.md":     "---\nname: same-name\ndescription: from b.md\ntype: project\n---\n\nbody b\n",
+		"links.md": "---\nname: links\ndescription: d\ntype: project\n---\n\nsee [[same-name]]\n",
+	})
 	rep := e.run(t, Options{Dir: dir, Target: billing})
-	if rep.Imported != 1 || rep.Skipped != 1 || len(rep.Notes) != 1 || !strings.HasPrefix(rep.Notes[0], "b.md: skipped, ") {
-		t.Errorf("report = %+v", rep)
+	if rep.Imported != 3 || rep.Skipped != 0 {
+		t.Errorf("Imported %d Skipped %d, want 3 and 0", rep.Imported, rep.Skipped)
 	}
-	if m := e.byTitle(t, billing.Key)["same name"]; m.Summary != "from a.md" {
-		t.Errorf("kept %q, want the first file", m.Summary)
+	if len(rep.Notes) != 1 || !strings.HasPrefix(rep.Notes[0], "b.md: ") || !strings.Contains(rep.Notes[0], "a.md") {
+		t.Errorf("Notes = %q, want one ambiguity note on b.md naming a.md", rep.Notes)
+	}
+	ms, err := e.st.ListMemories(context.Background(), billing.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bySource := map[string]store.Memory{}
+	for _, m := range ms {
+		bySource[m.Tags[1]] = m
+	}
+	a, b := bySource["native:a.md"], bySource["native:b.md"]
+	if a.Summary != "from a.md" || b.Summary != "from b.md" || a.Title != "same name" || b.Title != "same name" {
+		t.Fatalf("duplicates = %+v / %+v", a, b)
+	}
+	if !strings.HasSuffix(a.Path, "/same-name.md") || !strings.HasSuffix(b.Path, "/same-name-2.md") {
+		t.Errorf("paths = %q, %q", a.Path, b.Path)
+	}
+	if got := bySource["native:links.md"].Body; got != "see [["+a.ID+"]]\n" {
+		t.Errorf("links body = %q, want link to %s", got, a.ID)
+	}
+	rerun := e.run(t, Options{Dir: dir, Target: billing})
+	if rerun.Imported != 0 || rerun.Skipped != 3 {
+		t.Errorf("rerun = %+v", rerun)
+	}
+}
+
+func TestImportResumesAfterFailure(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"alpha-note.md": "---\nname: alpha-note\ndescription: d\ntype: project\n---\n\nsee [[beta-note]]\n",
+		"beta-note.md":  "---\nname: beta-note\ndescription: d\ntype: project\n---\n\nbeta\n",
+	})
+	calls := 0
+	saveMemory = func(s *memory.Service, ctx context.Context, p project.Project, in memory.Input) (store.Memory, error) {
+		calls++
+		if calls == 2 {
+			return store.Memory{}, errors.New("disk full")
+		}
+		return s.Save(ctx, p, in)
+	}
+	t.Cleanup(func() { saveMemory = (*memory.Service).Save })
+
+	rep, err := Run(context.Background(), e.svc, e.st, Options{Dir: dir, Target: billing})
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("Run err = %v, want the injected failure", err)
+	}
+	if rep.Imported != 1 {
+		t.Errorf("partial report = %+v, want Imported 1", rep)
+	}
+	if b := e.byTitle(t, billing.Key)["alpha note"].Body; b != "see [[beta-note]]\n" {
+		t.Fatalf("alpha body after failure = %q", b)
+	}
+
+	rep = e.run(t, Options{Dir: dir, Target: billing})
+	if rep.Imported != 1 || rep.Skipped != 1 || !reflect.DeepEqual(rep.Notes, []string{"alpha-note.md: skipped, already imported"}) {
+		t.Errorf("resume report = %+v", rep)
+	}
+	got := e.byTitle(t, billing.Key)
+	if want := "see [[" + got["beta note"].ID + "]]\n"; got["alpha note"].Body != want {
+		t.Errorf("alpha body after resume = %q, want %q", got["alpha note"].Body, want)
+	}
+	if len(rep.Unresolved) != 0 {
+		t.Errorf("Unresolved = %q", rep.Unresolved)
 	}
 }
 

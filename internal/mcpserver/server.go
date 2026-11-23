@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"slices"
 	"time"
 
@@ -20,6 +21,8 @@ const (
 	maxGetIDs      = 20
 	getMaxBytes    = 20000
 )
+
+var getID = regexp.MustCompile(`^(m-[0-9a-f]{12}|o-[1-9][0-9]{0,18})$`)
 
 type Deps struct {
 	Store   *store.Store
@@ -172,6 +175,11 @@ func (s *server) get(ctx context.Context, in getIn) (string, error) {
 	}
 	if len(in.IDs) > maxGetIDs {
 		return "", userErrorf("at most %d ids per call", maxGetIDs)
+	}
+	for i, id := range in.IDs {
+		if !getID.MatchString(id) {
+			return "", userErrorf("invalid id #%d: want m-<12 hex digits> or o-<number>", i+1)
+		}
 	}
 	sc, err := s.scope(ctx, in.Project)
 	if err != nil {

@@ -221,6 +221,37 @@ func TestBuildStripsPrivateInToolInput(t *testing.T) {
 	}
 }
 
+func escapeJSON(s, chars string) string {
+	for _, c := range chars {
+		s = strings.ReplaceAll(s, string(c), fmt.Sprintf("%cu%04x", '\\', c))
+	}
+	return s
+}
+
+func TestBuildRedactsEscapedJSON(t *testing.T) {
+	token := fakeToken()
+	input := escapeJSON(`{"command":"echo <private>hidden-value</private> done","note":"`+token+`"}`, "<>_")
+	response := escapeJSON(`{"stdout":"<PRIVATE>hidden-output</PRIVATE> ok","token":"`+token+`"}`, "<>_")
+	if strings.Contains(input, "<") || strings.Contains(input, "ghp_") {
+		t.Fatalf("setup: input not escaped: %s", input)
+	}
+	op := mustBuild(t, "PostToolUse", Payload{
+		SessionID:    "s1",
+		ToolName:     "Bash",
+		ToolInput:    json.RawMessage(input),
+		ToolResponse: json.RawMessage(response),
+	})
+	for _, leak := range []string{"hidden-value", "hidden-output", token[len("ghp_"):]} {
+		if strings.Contains(op.Obs.Body, leak) || strings.Contains(op.Obs.Title, leak) {
+			t.Errorf("%q leaked: title=%q body=%q", leak, op.Obs.Title, op.Obs.Body)
+		}
+	}
+	want := "input: {\"command\":\"echo  done\",\"note\":\"[REDACTED:github]\"}\noutput: {\"stdout\":\" ok\",\"token\":\"[REDACTED:github]\"}"
+	if op.Obs.Body != want {
+		t.Errorf("body = %q\nwant  %q", op.Obs.Body, want)
+	}
+}
+
 func TestBuildToolResponseObject(t *testing.T) {
 	op := mustBuild(t, "PostToolUse", Payload{
 		SessionID:    "s1",

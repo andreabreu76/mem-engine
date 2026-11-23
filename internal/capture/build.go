@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -150,11 +152,55 @@ func firstOf(fields map[string]string, keys []string) string {
 }
 
 func compactJSON(raw json.RawMessage) string {
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, raw); err != nil {
+	if !json.Valid(raw) {
 		return string(raw)
 	}
-	return buf.String()
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	var open []json.Delim
+	var counts []int
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return buf.String()
+		}
+		if err != nil {
+			return string(raw)
+		}
+		if d, ok := tok.(json.Delim); ok && (d == '}' || d == ']') {
+			buf.WriteByte(byte(d))
+			open, counts = open[:len(open)-1], counts[:len(counts)-1]
+			continue
+		}
+		if top := len(open) - 1; top >= 0 {
+			switch n := counts[top]; {
+			case n > 0 && open[top] == '{' && n%2 == 1:
+				buf.WriteByte(':')
+			case n > 0:
+				buf.WriteByte(',')
+			}
+			counts[top]++
+		}
+		switch v := tok.(type) {
+		case json.Delim:
+			buf.WriteByte(byte(v))
+			open, counts = append(open, v), append(counts, 0)
+		case string:
+			if err := enc.Encode(v); err != nil {
+				return string(raw)
+			}
+			buf.Truncate(buf.Len() - 1)
+		case json.Number:
+			buf.WriteString(v.String())
+		case bool:
+			buf.WriteString(strconv.FormatBool(v))
+		case nil:
+			buf.WriteString("null")
+		}
+	}
 }
 
 func responseText(raw json.RawMessage) string {

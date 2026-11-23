@@ -1,5 +1,11 @@
 # DECISIONS
 
+## 23/11/2026, commit do wiki isolado da configuração git do usuário
+
+- Decisão: `wiki.Repo` chama o binário `git` com `-C <Dir> --literal-pathspecs -c core.hooksPath=<Dir>/.git/mem-engine-hooks` (diretório vazio) em toda chamada, `--no-verify` no commit, identidade `mem-engine` e `commit.gpgsign=false` via `-c`, e remove `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` e afins do ambiente. O commit usa pathspec (`git add --all -- paths` e `git commit -- paths`), então só entram os arquivos da operação, inclusive a remoção
+- Por quê: um `core.hooksPath` global ou `init.templateDir` com hooks poderia bloquear o commit ou ler o conteúdo da memória; um `GIT_DIR` herdado faria o commit cair no repositório do usuário; `--literal-pathspecs` evita que um nome com `[` vire glob
+- Alternativa rejeitada: biblioteca git em Go (dependência grande para quatro comandos) e `--no-verify` sozinho, que não cobre `prepare-commit-msg` nem `post-commit`
+
 ## 23/11/2026, `mem setup` compara o settings.json pelo conteúdo decodificado e grava através de symlink
 
 - Decisão: `MergeHooks` decodifica com `UseNumber`, remove as entradas cujo `command` começa com `mem hook `, insere as de `Hooks()` e só reporta mudança se o resultado decodificado difere do original; sem mudança, devolve os bytes de entrada intactos. `WriteSettings` resolve symlink antes do `rename` atômico, preserva o modo do arquivo e grava `settings.json.bak` (0600) ao lado do caminho original

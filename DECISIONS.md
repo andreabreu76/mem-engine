@@ -1,5 +1,11 @@
 # DECISIONS
 
+## 23/11/2026, handoff ignora sessão vazia, preserva a linha `Lookup` e mostra arquivo relativo ao projeto
+
+- Decisão: `LastSession` só considera sessão com alguma observação além de `session_start` e `compact_start`. `Build` normaliza todo texto livre para uma linha, corta por runes com `…` (prompt 120, resposta 160, resumo de compactação 480, título de memória 64, arquivo 40 cortado pela esquerda) e, se ainda passar de `MaxChars`, corta o corpo em bytes na fronteira de rune antes da linha `Lookup`, que sempre fica inteira. Arquivo aparece relativo à chave do projeto e, fora dela, só pelo nome. Erro em `Collect` vai para o `mem.log` e o hook devolve só a primeira e a última linha
+- Por quê: toda sessão grava `session_start`, então uma sessão aberta e fechada sem uso viraria a "última sessão" com a linha vazia; a linha `Lookup` é a instrução que leva o agente às ferramentas MCP e não pode sumir no corte final; caminho absoluto gastaria o orçamento repetindo o prefixo do projeto, e o fim do caminho é a parte útil
+- Alternativa rejeitada: corte final cego em 1200 bytes (pode decepar a linha `Lookup`) e caminho absoluto ou só o nome base para arquivo dentro do projeto (ambíguo entre pacotes)
+
 ## 23/11/2026, ferramentas MCP de escrita presas ao escopo atual e `mem setup` consultando o `claude` antes de registrar
 
 - Decisão: `update` e `forget` só agem sobre memória do projeto atual ou `user`; id de outro projeto responde "not found", igual a id inexistente. Erro volta ao agente como resultado com `isError`: os que ele pode corrigir (tipo, título ou resumo inválido, `scope`, `since`, projeto desconhecido ou ambíguo, id não encontrado, arquivo com outra memória) com o texto original, qualquer outro como `<tool> failed, see mem.log`, sempre com o erro inteiro no `mem.log`, para não mandar caminho local nem saída do git ao provedor do modelo. `mem setup` roda `claude mcp get mem-engine` antes de `claude mcp add` e pula o registro quando já existe ou quando `claude` não está no PATH; `--plan` só imprime o comando. O `claude` é chamado por `runCommand`, variável de pacote em `cmd/mem` que o `TestMain` troca por um falso, e o doctor recebe o mesmo executor em `Env.RunCommand`

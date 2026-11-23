@@ -11,6 +11,8 @@ import (
 	"github.com/andreabreu76/mem-engine/internal/applog"
 	"github.com/andreabreu76/mem-engine/internal/capture"
 	"github.com/andreabreu76/mem-engine/internal/config"
+	"github.com/andreabreu76/mem-engine/internal/handoff"
+	"github.com/andreabreu76/mem-engine/internal/store"
 )
 
 func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -41,9 +43,25 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case event == "":
 		log.Error("mem hook called without an event name")
 	default:
-		capture.Handle(context.Background(), event, stdin, stdout, capture.Deps{Cfg: cfg, Log: log, Now: time.Now})
+		capture.Handle(context.Background(), event, stdin, stdout, capture.Deps{
+			Cfg:                cfg,
+			Log:                log,
+			Now:                time.Now,
+			SessionStartOutput: sessionStartOutput(log),
+		})
 	}
 	return 0
+}
+
+func sessionStartOutput(log *slog.Logger) func(context.Context, *store.Store, capture.Op, capture.Payload) string {
+	return func(ctx context.Context, st *store.Store, op capture.Op, _ capture.Payload) string {
+		in, err := handoff.Collect(ctx, st, op.Project, op.Session.SessionID, op.Session.Source)
+		if err != nil {
+			log.Warn("build handoff failed", "event", "SessionStart", "session_id", op.Session.SessionID, "error", err.Error())
+			return handoff.Build(handoff.Input{Project: op.Project})
+		}
+		return handoff.Build(in)
+	}
 }
 
 func fallbackLogDir() string {

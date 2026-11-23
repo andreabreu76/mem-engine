@@ -2,10 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andreabreu76/mem-engine/internal/capture"
+	"github.com/andreabreu76/mem-engine/internal/store"
 )
 
 func setHome(t *testing.T) string {
@@ -61,5 +67,71 @@ func TestHookCommandBrokenConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "config") {
 		t.Errorf("mem.log = %q", data)
+	}
+}
+
+func TestHookSessionStartInjectsHandoff(t *testing.T) {
+	setHome(t)
+	cwd := t.TempDir()
+	hook := func(event, payload string) string {
+		t.Helper()
+		var out, errb bytes.Buffer
+		if code := run([]string{"hook", event}, strings.NewReader(payload), &out, &errb); code != 0 {
+			t.Fatalf("hook %s = %d", event, code)
+		}
+		return out.String()
+	}
+	payload := func(fields map[string]string) string {
+		t.Helper()
+		fields["cwd"] = cwd
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	hook("SessionStart", payload(map[string]string{"session_id": "s1", "source": "startup"}))
+	hook("UserPromptSubmit", payload(map[string]string{"session_id": "s1", "prompt": "fix the retry loop in payments"}))
+	hook("Stop", payload(map[string]string{"session_id": "s1", "last_assistant_message": "retry now backs off"}))
+
+	out := hook("SessionStart", payload(map[string]string{"session_id": "s2", "source": "startup"}))
+	var got struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("stdout %q is not JSON: %v", out, err)
+	}
+	text := got.HookSpecificOutput.AdditionalContext
+	if got.HookSpecificOutput.HookEventName != "SessionStart" ||
+		!strings.Contains(text, `asked "fix the retry loop in payments"`) ||
+		!strings.Contains(text, `stopped at "retry now backs off"`) ||
+		!strings.HasPrefix(text, "mem-engine | project "+filepath.Base(cwd)) {
+		t.Errorf("stdout = %q", out)
+	}
+}
+
+func TestSessionStartOutputFallsBackOnError(t *testing.T) {
+	setHome(t)
+	st, err := store.Open(filepath.Join(t.TempDir(), "mem.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, nil))
+	op := capture.Op{
+		Project: store.ProjectRow{Key: "/home/dev/src/billing-api", Name: "billing-api"},
+		Session: store.SessionEvent{SessionID: "s2", Source: "startup"},
+	}
+	got := sessionStartOutput(log)(context.Background(), st, op, capture.Payload{SessionID: "s2", Prompt: "secret prompt text"})
+	want := "mem-engine | project billing-api\nLookup: search -> timeline -> get (memory tools of this project)."
+	if got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+	if !strings.Contains(logs.String(), "build handoff failed") || strings.Contains(logs.String(), "secret prompt text") {
+		t.Errorf("log = %q", logs.String())
 	}
 }

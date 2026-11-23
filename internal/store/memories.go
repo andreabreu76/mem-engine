@@ -77,7 +77,13 @@ func (s *Store) DeleteMemory(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Store) GetMemory(ctx context.Context, id string) (Memory, error) {
+const memoryColumns = "id, project, type, title, summary, body, tags, path, source_session, created_at, updated_at"
+
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanMemory(row scanner) (Memory, error) {
 	var (
 		m       Memory
 		tags    string
@@ -85,18 +91,11 @@ func (s *Store) GetMemory(ctx context.Context, id string) (Memory, error) {
 		created int64
 		updated int64
 	)
-	err := s.db.QueryRowContext(ctx, `
-SELECT id, project, type, title, summary, body, tags, path, source_session, created_at, updated_at
-FROM memories WHERE id = ?`, id).Scan(
-		&m.ID, &m.Project, &m.Type, &m.Title, &m.Summary, &m.Body, &tags, &m.Path, &source, &created, &updated)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Memory{}, fmt.Errorf("memory %s: %w", id, ErrNotFound)
-	}
-	if err != nil {
-		return Memory{}, fmt.Errorf("get memory %s: %w", id, err)
+	if err := row.Scan(&m.ID, &m.Project, &m.Type, &m.Title, &m.Summary, &m.Body, &tags, &m.Path, &source, &created, &updated); err != nil {
+		return Memory{}, err
 	}
 	if err := json.Unmarshal([]byte(tags), &m.Tags); err != nil {
-		return Memory{}, fmt.Errorf("get memory %s: decode tags: %w", id, err)
+		return Memory{}, fmt.Errorf("decode tags: %w", err)
 	}
 	if m.Tags == nil {
 		m.Tags = []string{}
@@ -104,6 +103,17 @@ FROM memories WHERE id = ?`, id).Scan(
 	m.SourceSession = source.String
 	m.Created = time.Unix(created, 0).UTC()
 	m.Updated = time.Unix(updated, 0).UTC()
+	return m, nil
+}
+
+func (s *Store) GetMemory(ctx context.Context, id string) (Memory, error) {
+	m, err := scanMemory(s.db.QueryRowContext(ctx, "SELECT "+memoryColumns+" FROM memories WHERE id = ?", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Memory{}, fmt.Errorf("memory %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return Memory{}, fmt.Errorf("get memory %s: %w", id, err)
+	}
 	return m, nil
 }
 

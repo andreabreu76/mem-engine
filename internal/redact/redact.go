@@ -30,7 +30,8 @@ var builtin = []struct {
 	{"anthropic", `sk-ant-[A-Za-z0-9_-]{20,}`},
 	{"openai", `sk-(proj-)?[A-Za-z0-9_-]{20,}`},
 	{"jwt", `eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`},
-	{"conn", `:\\?/\\?/[^\s:/@\\]*:(?P<secret>(?:\\[^/\s]|[^\s/\\])+)@`},
+	{"conn", `://[^\s:/@]*:(?P<secret>[^\s/]+)@`},
+	{"conn", `:\\/\\/(?:\\[^/\s]|[^\s:/@\\])*:(?P<secret>(?:\\[^/\s]|[^\s/\\])+)@`},
 	{"conn", `:(?P<secret>[^\s/]+)@(?:tcp|unix)\(`},
 }
 

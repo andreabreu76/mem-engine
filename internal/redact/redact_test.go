@@ -191,6 +191,21 @@ func TestCleanConnEscapedSlashes(t *testing.T) {
 	}
 }
 
+func TestCleanConnBackslashCases(t *testing.T) {
+	r := mustNew(t, nil, false)
+	cases := []struct{ in, want string }{
+		{`postgres://u:` + "pw12" + `\@h/x`, `postgres://u:[REDACTED:conn]@h/x`},
+		{`postgres://DOM\u:` + "pw12" + `@h/x`, `postgres://DOM\u:[REDACTED:conn]@h/x`},
+		{`postgres:\/\/DOMAIN\\user:` + "pw12" + `@h\/x`, `postgres:\/\/DOMAIN\\user:[REDACTED:conn]@h\/x`},
+		{`postgres:\/\/u:` + "pw12" + `\\@h\/x`, `postgres:\/\/u:[REDACTED:conn]@h\/x`},
+	}
+	for _, tc := range cases {
+		if got := r.Clean(tc.in); got != tc.want {
+			t.Errorf("Clean(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestCleanPGPBlock(t *testing.T) {
 	r := mustNew(t, nil, false)
 	body := strings.Repeat("P", 64)

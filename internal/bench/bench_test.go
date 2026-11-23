@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/andreabreu76/mem-engine/internal/handoff"
+	"github.com/andreabreu76/mem-engine/internal/mcpserver"
 	"github.com/andreabreu76/mem-engine/internal/project"
 	"github.com/andreabreu76/mem-engine/internal/store"
 )
@@ -64,9 +65,38 @@ func TestNativeLoadedBytesCaps(t *testing.T) {
 
 func TestResultTokens(t *testing.T) {
 	setEnv(t)
-	native, hand := Result{NativeBytes: 8003, HandoffBytes: 401}.Tokens()
-	if native != 2000 || hand != 100 {
-		t.Errorf("Tokens = %d, %d", native, hand)
+	r := Result{NativeBytes: 8003, HandoffBytes: 401, SessionOpenBytes: 3999}
+	native, hand, open := r.Tokens()
+	if native != 2000 || hand != 100 || open != 999 || r.MemEngineTokens() != 1100 {
+		t.Errorf("Tokens = %d, %d, %d, total %d", native, hand, open, r.MemEngineTokens())
+	}
+}
+
+func TestSkillDescriptionMatchesPlugin(t *testing.T) {
+	setEnv(t)
+	b, err := os.ReadFile(filepath.Join("..", "..", "plugins", "mem-engine", "skills", "mem-engine", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := strings.Split(string(b), "---")[1]
+	if !strings.Contains(front, "\nname: "+SkillName+"\n") || !strings.Contains(front, "\ndescription: "+SkillDescription+"\n") {
+		t.Errorf("SKILL.md frontmatter %q does not match SkillName/SkillDescription", front)
+	}
+}
+
+func TestSessionOpenBytes(t *testing.T) {
+	setEnv(t)
+	tools, err := mcpserver.ToolsPayload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := SessionOpenBytes(context.Background())
+	if err != nil || got != len(tools)+len(SkillName)+len(SkillDescription) {
+		t.Errorf("SessionOpenBytes = %d, %v", got, err)
+	}
+	r, err := Run(context.Background(), nil, billing, filepath.Join(t.TempDir(), "MEMORY.md"))
+	if err != nil || r.SessionOpenBytes != got {
+		t.Errorf("Run SessionOpenBytes = %d, %v, want %d", r.SessionOpenBytes, err, got)
 	}
 }
 
@@ -114,7 +144,11 @@ func TestRunComparesSizes(t *testing.T) {
 	if !strings.Contains(text, "fix the retry loop") || !strings.Contains(text, "Invoices use UTC") {
 		t.Fatalf("handoff = %q", text)
 	}
-	want := Result{NativePath: nativePath, NativeBytes: NativeLoadedBytes(native.Bytes()), HandoffBytes: len(text)}
+	open, err := SessionOpenBytes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Result{NativePath: nativePath, NativeBytes: NativeLoadedBytes(native.Bytes()), HandoffBytes: len(text), SessionOpenBytes: open}
 	if got != want {
 		t.Errorf("Run = %+v, want %+v", got, want)
 	}
@@ -131,7 +165,11 @@ func TestRunWithoutStoreOrNative(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	minimal := handoff.Build(handoff.Input{Project: store.ProjectRow{Key: billing.Key, Name: billing.Name, Dir: billing.Dir}, Source: "startup"})
-	want := Result{NativePath: nativePath, HandoffBytes: len(minimal)}
+	open, err := SessionOpenBytes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Result{NativePath: nativePath, HandoffBytes: len(minimal), SessionOpenBytes: open}
 	if got != want {
 		t.Errorf("Run = %+v, want %+v", got, want)
 	}

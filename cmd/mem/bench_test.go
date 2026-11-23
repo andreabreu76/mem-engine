@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +41,20 @@ func writeNative(t *testing.T, path string, content string) {
 	}
 }
 
+func sessionOpenLine(t *testing.T) (string, int) {
+	t.Helper()
+	n, err := bench.SessionOpenBytes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("mcp tools + skill: %d bytes (~%d tokens)\n", n, n/4), n
+}
+
+func savingLine(nativeBytes, memBytes int) string {
+	percent := int(math.Round(float64(nativeBytes-memBytes) * 100 / float64(nativeBytes)))
+	return fmt.Sprintf("saving: ~%d tokens per session (%d%%)\n", nativeBytes/4-memBytes/4, percent)
+}
+
 func TestBenchCommandWithoutDatabase(t *testing.T) {
 	home := setHome(t)
 	if err := os.Remove(home); err != nil {
@@ -52,9 +67,10 @@ func TestBenchCommandWithoutDatabase(t *testing.T) {
 	if code := run([]string{"bench", dir}, nil, &out, &errb); code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errb.String())
 	}
+	openLine, openBytes := sessionOpenLine(t)
 	want := "native MEMORY.md: 4000 bytes loaded (~1000 tokens)\n" +
 		"mem-engine handoff: 98 bytes (~24 tokens)\n" +
-		"saving: ~976 tokens per session (98%)\n"
+		openLine + savingLine(4000, 98+openBytes)
 	if out.String() != want {
 		t.Errorf("stdout =\n%s\nwant\n%s", out.String(), want)
 	}
@@ -113,8 +129,9 @@ func TestBenchCommandNativeNotFound(t *testing.T) {
 	if code := run([]string{"bench"}, nil, &out, &errb); code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errb.String())
 	}
+	openLine, _ := sessionOpenLine(t)
 	want := "native MEMORY.md: not found at " + bench.NativeMemoryPath(os.Getenv("HOME"), p.Key) + "\n" +
-		"mem-engine handoff: 98 bytes (~24 tokens)\n"
+		"mem-engine handoff: 98 bytes (~24 tokens)\n" + openLine
 	if out.String() != want {
 		t.Errorf("stdout =\n%s\nwant\n%s", out.String(), want)
 	}
@@ -133,9 +150,10 @@ func TestBenchCommandNegativeSaving(t *testing.T) {
 	if code := run([]string{"bench", dir, "--native=" + native}, nil, &out, &errb); code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errb.String())
 	}
+	openLine, openBytes := sessionOpenLine(t)
 	want := "native MEMORY.md: 60 bytes loaded (~15 tokens)\n" +
 		"mem-engine handoff: 98 bytes (~24 tokens)\n" +
-		"saving: ~-9 tokens per session (-63%)\n"
+		openLine + savingLine(60, 98+openBytes)
 	if out.String() != want {
 		t.Errorf("stdout =\n%s\nwant\n%s", out.String(), want)
 	}
@@ -183,9 +201,10 @@ func TestBenchCommandNativeFromRepoRootWithGroup(t *testing.T) {
 	if code := run([]string{"bench", dir}, nil, &out, &errb); code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errb.String())
 	}
+	openLine, openBytes := sessionOpenLine(t)
 	want := "native MEMORY.md: 4000 bytes loaded (~1000 tokens)\n" +
 		"mem-engine handoff: 91 bytes (~22 tokens)\n" +
-		"saving: ~978 tokens per session (98%)\n"
+		openLine + savingLine(4000, 91+openBytes)
 	if out.String() != want {
 		t.Errorf("stdout =\n%s\nwant\n%s", out.String(), want)
 	}

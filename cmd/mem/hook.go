@@ -15,6 +15,8 @@ import (
 	"github.com/andreabreu76/mem-engine/internal/store"
 )
 
+var handleHook = capture.Handle
+
 func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cfg, cfgErr := config.Load()
 	logDir := cfg.LogDir()
@@ -35,6 +37,9 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("hook panicked", "event", event)
+			if cfgErr == nil {
+				recordPanic(cfg, event)
+			}
 		}
 	}()
 	switch {
@@ -43,7 +48,7 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case event == "":
 		log.Error("mem hook called without an event name")
 	default:
-		capture.Handle(context.Background(), event, stdin, stdout, capture.Deps{
+		handleHook(context.Background(), event, stdin, stdout, capture.Deps{
 			Cfg:                cfg,
 			Log:                log,
 			Now:                time.Now,
@@ -51,6 +56,15 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		})
 	}
 	return 0
+}
+
+func recordPanic(cfg config.Config, event string) {
+	st, err := store.Open(cfg.DBPath())
+	if err != nil {
+		return
+	}
+	defer st.Close()
+	_ = st.RecordCaptureError(context.Background(), event, "hook panicked", time.Now())
 }
 
 func sessionStartOutput(log *slog.Logger) func(context.Context, *store.Store, capture.Op, capture.Payload) string {

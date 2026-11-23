@@ -9,31 +9,31 @@ import (
 )
 
 type Observation struct {
-	ID        int64
-	SessionID string
-	Project   string
-	Kind      string
-	Title     string
-	Body      string
-	ToolName  string
-	Files     []string
-	CreatedAt time.Time
+	ID        int64     `json:"id"`
+	SessionID string    `json:"session_id"`
+	Project   string    `json:"project"`
+	Kind      string    `json:"kind"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	ToolName  string    `json:"tool_name"`
+	Files     []string  `json:"files"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type SessionEvent struct {
-	SessionID string
-	Project   string
-	Cwd       string
-	Source    string
-	EndReason string
-	At        time.Time
-	End       bool
+	SessionID string    `json:"session_id"`
+	Project   string    `json:"project"`
+	Cwd       string    `json:"cwd"`
+	Source    string    `json:"source"`
+	EndReason string    `json:"end_reason"`
+	At        time.Time `json:"at"`
+	End       bool      `json:"end"`
 }
 
 type ProjectRow struct {
-	Key  string
-	Name string
-	Dir  string
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	Dir  string `json:"dir"`
 }
 
 var observationKinds = map[string]bool{

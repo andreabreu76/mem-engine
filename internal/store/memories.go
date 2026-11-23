@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound  = errors.New("not found")
+	ErrAmbiguous = errors.New("ambiguous")
+)
 
 type Memory struct {
 	ID, Project, Type, Title, Summary, Body string
@@ -206,5 +209,5 @@ func (s *Store) FindProject(ctx context.Context, nameOrKey string) (ProjectRow, 
 	for i, r := range found {
 		keys[i] = r.Key
 	}
-	return ProjectRow{}, fmt.Errorf("project name %q is ambiguous, use one of the keys: %s", nameOrKey, strings.Join(keys, ", "))
+	return ProjectRow{}, fmt.Errorf("project name %q is %w, use one of the keys: %s", nameOrKey, ErrAmbiguous, strings.Join(keys, ", "))
 }

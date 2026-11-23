@@ -1,5 +1,23 @@
 # DECISIONS
 
+## 23/11/2026, SessionStart síncrono roda numa goroutine com prazo de 5 s e responde com o handoff mínimo no estouro
+
+- Decisão: no SessionStart, `capture.Handle` monta o `Op` no fluxo principal e passa drain, gravação, GC e `SessionStartOutput` para uma goroutine que é dona do store (abre, usa e fecha). O fluxo principal espera o resultado ou o `context.WithTimeout` de 5 s (`Deps.SessionStartTimeout` nos testes); no estouro escreve `handoff.Build` só com o projeto e sai, e o processo do hook termina sem esperar a goroutine. Panic dentro da goroutine é recuperado ali, grava `capture_errors` com "hook panicked" e também devolve o handoff mínimo
+- Por quê: só o contexto não limita uma etapa que não o respeita (lock do git, disco lento, bug), e a sessão do Claude Code ficaria presa no hook; o `recover` do `runHook` não alcança panic de outra goroutine
+- Alternativa rejeitada: confiar apenas no cancelamento por contexto em cada etapa e fechar o store no fluxo principal (corrida com a goroutine ainda usando o store)
+
+## 23/11/2026, `mem bench` soma o custo fixo de abertura da sessão ao lado do mem-engine
+
+- Decisão: `bench.SessionOpenBytes` mede o payload do `tools/list` do servidor MCP (montado por `mcpserver.ToolsPayload` com cliente em memória, JSON sem escape de HTML) mais nome e descrição da skill do plugin; a economia compara o `MEMORY.md` nativo com handoff mais esse custo fixo. A descrição da skill fica em constante no pacote `bench` e um teste confere com o frontmatter do `SKILL.md`. As descrições das ferramentas foram encurtadas sem perder "Step N of 3" nem a regra do parâmetro `project`
+- Por quê: o número anterior (97%) escondia mais de 4 KB carregados em toda sessão; com `MEMORY.md` pequeno o mem-engine custa mais que o nativo e o relatório precisa mostrar isso
+- Alternativa rejeitada: embutir o `SKILL.md` com `go:embed` (fica fora da árvore do pacote) e contar só o handoff
+
+## 23/11/2026, memória curada passa pela mesma redação da captura
+
+- Decisão: `memory.Service` tem `Redactor`; `Save` e `Update` aplicam `Clean` em título, resumo, corpo e cada tag antes da validação e da escrita no wiki, no commit e no índice. `mcp`, `ui` e `import` montam o redator a partir do `config.toml` (`newMemoryService`); `Redactor` nil usa os padrões embutidos
+- Por quê: o wiki é um repositório git, então um segredo salvo uma vez fica no histórico mesmo depois do `forget`
+- Alternativa rejeitada: `Redactor` nil sem redação (um chamador esquecido gravaria segredo em claro)
+
 ## 23/11/2026, `mem project merge` move as memórias antes das observações e retoma pelo id no destino
 
 - Decisão: o comando chama primeiro `Service.MoveProject` e depois `Store.MergeProject`, este só quando `MoveProject` termina sem erro. `MoveProject` trava os dois repositórios do wiki em ordem alfabética de `Dir` (mesma regra do `Reindex`, sem travar duas vezes o mesmo diretório). A lista de trabalho é a união das memórias indexadas em `from` com os ids lidos dos arquivos do diretório de `from`; arquivo cujo id está indexado em outro projeto que não `to` interrompe com erro. Por memória, quando o id já existe no destino a cópia do destino vale e é reusada; senão grava no destino com o nome original (ou sufixado por `UniqueName`). Depois commita no destino, remove e commita na origem e só então atualiza a linha do índice. No fim, se o diretório de `from` ainda tiver qualquer `.md` (arquivo que não é memória), devolve erro com os nomes e o comando não chama `MergeProject`. `MergeProject` move `observations.project` e `sessions.project` numa transação e apaga a linha de `projects` da origem apenas quando nenhuma memória aponta mais para ela. `mem setup --disable-native-memory` é um modo próprio, que só troca `autoMemoryEnabled` e não mexe em hooks nem no MCP. `mem project alias` monta o arquivo final, valida com `toml.Decode` e grava de forma atômica com `setup.WriteSettings` (modo preservado, `config.toml.bak`)

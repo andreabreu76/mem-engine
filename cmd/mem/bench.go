@@ -27,16 +27,20 @@ func runBench(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "mem bench: %v\n", err)
 		return 1
 	}
-	nativeTokens, handoffTokens := r.Tokens()
+	nativeTokens, handoffTokens, openTokens := r.Tokens()
 	if r.NativeBytes == 0 {
 		fmt.Fprintf(stdout, "native MEMORY.md: not found at %s\n", r.NativePath)
-		fmt.Fprintf(stdout, "mem-engine handoff: %d bytes (~%d tokens)\n", r.HandoffBytes, handoffTokens)
+	} else {
+		fmt.Fprintf(stdout, "native MEMORY.md: %d bytes loaded (~%d tokens)\n", r.NativeBytes, nativeTokens)
+	}
+	fmt.Fprintf(stdout, "mem-engine handoff: %d bytes (~%d tokens)\n", r.HandoffBytes, handoffTokens)
+	fmt.Fprintf(stdout, "mcp tools + skill: %d bytes (~%d tokens)\n", r.SessionOpenBytes, openTokens)
+	if r.NativeBytes == 0 {
 		return 0
 	}
-	percent := int(math.Round(float64(r.NativeBytes-r.HandoffBytes) * 100 / float64(r.NativeBytes)))
-	fmt.Fprintf(stdout, "native MEMORY.md: %d bytes loaded (~%d tokens)\n", r.NativeBytes, nativeTokens)
-	fmt.Fprintf(stdout, "mem-engine handoff: %d bytes (~%d tokens)\n", r.HandoffBytes, handoffTokens)
-	fmt.Fprintf(stdout, "saving: ~%d tokens per session (%d%%)\n", nativeTokens-handoffTokens, percent)
+	memBytes := r.HandoffBytes + r.SessionOpenBytes
+	percent := int(math.Round(float64(r.NativeBytes-memBytes) * 100 / float64(r.NativeBytes)))
+	fmt.Fprintf(stdout, "saving: ~%d tokens per session (%d%%)\n", nativeTokens-r.MemEngineTokens(), percent)
 	return 0
 }
 

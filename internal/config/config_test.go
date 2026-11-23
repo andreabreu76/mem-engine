@@ -1,10 +1,12 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, home, content string) {
@@ -138,6 +140,26 @@ func TestExpandHome(t *testing.T) {
 	for in, want := range cases {
 		if got := ExpandHome(in); got != want {
 			t.Errorf("ExpandHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRetentionClamped(t *testing.T) {
+	const day = 24 * time.Hour
+	cases := []struct {
+		days int
+		want time.Duration
+	}{
+		{0, 0},
+		{-5, 0},
+		{90, 90 * day},
+		{MaxRetentionDays, MaxRetentionDays * day},
+		{MaxRetentionDays + 1, MaxRetentionDays * day},
+		{math.MaxInt, MaxRetentionDays * day},
+	}
+	for _, c := range cases {
+		if got := (Config{RetentionDays: c.days}).Retention(); got != c.want {
+			t.Errorf("Retention(%d) = %v, want %v", c.days, got, c.want)
 		}
 	}
 }

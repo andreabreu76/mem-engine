@@ -27,6 +27,7 @@ const (
 	memoryExt  = ".md"
 	commitUser = "mem-engine"
 	commitMail = "mem-engine@localhost"
+	staleLock  = 60 * time.Second
 )
 
 func OpenRepo(wikiRoot, dirName string) (*Repo, error) {
@@ -112,6 +113,9 @@ func (r *Repo) Commit(msg string, paths ...string) error {
 	if err := r.ensureGit(); err != nil {
 		return err
 	}
+	if err := r.removeStaleIndexLock(); err != nil {
+		return err
+	}
 	stage, err := r.stageable(paths)
 	if err != nil || len(stage) == 0 {
 		return err
@@ -195,6 +199,18 @@ func (r *Repo) ensureGit() error {
 	return nil
 }
 
+func (r *Repo) removeStaleIndexLock() error {
+	lock := filepath.Join(r.Dir, ".git", "index.lock")
+	info, err := os.Stat(lock)
+	if err != nil || time.Since(info.ModTime()) < staleLock {
+		return nil
+	}
+	if err := os.Remove(lock); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("wiki: remove stale %s: %w", lock, err)
+	}
+	return nil
+}
+
 func (r *Repo) hooksPath() string {
 	return filepath.Join(r.Dir, ".git", hooksDir)
 }
@@ -205,7 +221,7 @@ func (r *Repo) git(args ...string) error {
 }
 
 func (r *Repo) run(args ...string) ([]byte, error) {
-	full := append([]string{"-C", r.Dir, "--literal-pathspecs", "-c", "core.hooksPath=" + r.hooksPath()}, args...)
+	full := append([]string{"-C", r.Dir, "--literal-pathspecs", "-c", "core.hooksPath=" + r.hooksPath(), "-c", "core.fsmonitor=false"}, args...)
 	cmd := exec.Command("git", full...)
 	cmd.Env = append(gitEnv(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(r.Dir))
 	var stdout, stderr bytes.Buffer

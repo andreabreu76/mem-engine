@@ -25,7 +25,7 @@ type Payload struct {
 }
 
 type Op struct {
-	Project store.ProjectRow
-	Session store.SessionEvent
-	Obs     *store.Observation
+	Project store.ProjectRow   `json:"project"`
+	Session store.SessionEvent `json:"session"`
+	Obs     *store.Observation `json:"obs"`
 }

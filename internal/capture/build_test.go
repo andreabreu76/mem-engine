@@ -3,7 +3,9 @@ package capture
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/andreabreu76/mem-engine/internal/config"
 	"github.com/andreabreu76/mem-engine/internal/project"
 	"github.com/andreabreu76/mem-engine/internal/redact"
+	"github.com/andreabreu76/mem-engine/internal/store"
 )
 
 var (
@@ -334,5 +337,44 @@ func TestBuildRedactsAllStoredFields(t *testing.T) {
 	}
 	if data, _ := json.Marshal(op); strings.Contains(string(data), token) {
 		t.Errorf("op leaks token: %s", data)
+	}
+}
+
+func TestOpJSONKeysAreStable(t *testing.T) {
+	at := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	op := Op{
+		Project: store.ProjectRow{Key: "/home/dev/src/billing-api", Name: "billing-api", Dir: "billing-api-abc123"},
+		Session: store.SessionEvent{SessionID: "s1", Project: "/home/dev/src/billing-api", Cwd: "/home/dev/src/billing-api", Source: "startup", EndReason: "exit", At: at, End: true},
+		Obs:     &store.Observation{ID: 1, SessionID: "s1", Project: "/home/dev/src/billing-api", Kind: "tool", Title: "Edit", Body: "b", ToolName: "Edit", Files: []string{"a.go"}, CreatedAt: at},
+	}
+	data, err := json.Marshal(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal %s: %v", data, err)
+	}
+	want := map[string][]string{
+		"project": {"dir", "key", "name"},
+		"session": {"at", "cwd", "end", "end_reason", "project", "session_id", "source"},
+		"obs":     {"body", "created_at", "files", "id", "kind", "project", "session_id", "title", "tool_name"},
+	}
+	if len(got) != len(want) {
+		t.Errorf("top-level keys = %s", data)
+	}
+	for section, keys := range want {
+		var have []string
+		for k := range got[section] {
+			have = append(have, k)
+		}
+		sort.Strings(have)
+		if !reflect.DeepEqual(have, keys) {
+			t.Errorf("%s keys = %v, want %v", section, have, keys)
+		}
+	}
+	var back Op
+	if err := json.Unmarshal(data, &back); err != nil || !reflect.DeepEqual(back, op) {
+		t.Errorf("round trip = %+v, %v", back, err)
 	}
 }

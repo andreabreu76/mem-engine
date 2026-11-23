@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/andreabreu76/mem-engine/internal/config"
+	"github.com/andreabreu76/mem-engine/internal/handoff"
 	"github.com/andreabreu76/mem-engine/internal/project"
 	"github.com/andreabreu76/mem-engine/internal/redact"
 	"github.com/andreabreu76/mem-engine/internal/spool"
@@ -17,18 +18,20 @@ import (
 )
 
 const (
-	maxPayloadBytes    = 32 << 20
-	sessionEndTimeout  = 1500 * time.Millisecond
-	sessionEndBusyWait = 500 * time.Millisecond
-	spoolEvent         = "spool"
+	maxPayloadBytes     = 32 << 20
+	sessionEndTimeout   = 1500 * time.Millisecond
+	sessionEndBusyWait  = 500 * time.Millisecond
+	sessionStartTimeout = 5 * time.Second
+	spoolEvent          = "spool"
 )
 
 type Deps struct {
-	Cfg                config.Config
-	Log                *slog.Logger
-	Now                func() time.Time
-	StoreOptions       store.Options
-	SessionStartOutput func(ctx context.Context, st *store.Store, op Op, p Payload) string
+	Cfg                 config.Config
+	Log                 *slog.Logger
+	Now                 func() time.Time
+	StoreOptions        store.Options
+	SessionStartOutput  func(ctx context.Context, st *store.Store, op Op, p Payload) string
+	SessionStartTimeout time.Duration
 }
 
 type handler struct {
@@ -58,54 +61,113 @@ func Handle(ctx context.Context, event string, stdin io.Reader, stdout io.Writer
 			h.opts.BusyTimeout = sessionEndBusyWait
 		}
 	}
-	defer h.close()
+	if event == eventSessionStart {
+		timeout := d.SessionStartTimeout
+		if timeout <= 0 {
+			timeout = sessionStartTimeout
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	return h.run(ctx, stdin, stdout)
 }
 
 func (h *handler) run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+	op, p, r, keep, err := h.prepare(ctx, stdin)
+	if err == nil && keep && h.event == eventSessionStart {
+		return h.startSession(ctx, op, p, r, stdout)
+	}
+	defer h.close()
+	if err != nil || !keep {
+		return err
+	}
+	_, _, err = h.persist(ctx, op, p, r)
+	return err
+}
+
+func (h *handler) prepare(ctx context.Context, stdin io.Reader) (Op, Payload, *redact.Redactor, bool, error) {
 	data, err := io.ReadAll(io.LimitReader(stdin, maxPayloadBytes))
 	if err != nil {
-		return h.fail(ctx, "", "read hook payload failed")
+		return Op{}, Payload{}, nil, false, h.fail(ctx, "", "read hook payload failed")
 	}
 	var p Payload
 	if err := json.Unmarshal(data, &p); err != nil {
-		return h.fail(ctx, "", "hook payload is not valid JSON")
+		return Op{}, p, nil, false, h.fail(ctx, "", "hook payload is not valid JSON")
 	}
 	r, err := redact.New(h.d.Cfg.RedactExtra, h.d.Cfg.RedactDisableBuiltin)
 	if err != nil {
-		return h.fail(ctx, p.SessionID, "invalid redact_extra pattern in config.toml")
+		return Op{}, p, nil, false, h.fail(ctx, p.SessionID, "invalid redact_extra pattern in config.toml")
 	}
 	proj, err := project.Resolve(p.Cwd, h.d.Cfg)
 	if err != nil {
-		return h.fail(ctx, p.SessionID, "resolve project from cwd failed")
+		return Op{}, p, nil, false, h.fail(ctx, p.SessionID, "resolve project from cwd failed")
 	}
 	op, keep, err := Build(h.event, p, proj, h.d.Cfg, r, h.now())
 	if err != nil {
-		return h.fail(ctx, p.SessionID, "unsupported hook event")
+		return Op{}, p, nil, false, h.fail(ctx, p.SessionID, "unsupported hook event")
 	}
-	if !keep {
-		return nil
-	}
+	return op, p, r, keep, nil
+}
+
+func (h *handler) persist(ctx context.Context, op Op, p Payload, r *redact.Redactor) (*store.Store, bool, error) {
 	st, err := h.store()
 	if err != nil {
 		h.log.Warn("store unavailable, event spooled", "event", h.event, "session_id", p.SessionID, "error", err.Error())
-		return h.spool(ctx, op)
+		return nil, false, h.spool(ctx, op)
 	}
-	written := true
 	if err := h.capture(ctx, st, r, op); err != nil {
-		written = false
 		h.log.Warn("store write failed, event spooled", "event", h.event, "session_id", p.SessionID, "error", err.Error())
-		if err := h.spool(ctx, op); err != nil {
-			return err
-		}
+		return st, false, h.spool(ctx, op)
 	}
-	if h.event == eventSessionStart {
-		if written {
-			h.gc(ctx, st, p)
-		}
-		h.sessionStart(ctx, st, op, p, stdout)
+	return st, true, nil
+}
+
+type startResult struct {
+	text string
+	err  error
+}
+
+func (h *handler) startSession(ctx context.Context, op Op, p Payload, r *redact.Redactor, stdout io.Writer) error {
+	done := make(chan startResult, 1)
+	go func() {
+		var res startResult
+		defer func() {
+			if v := recover(); v != nil {
+				res = startResult{text: minimalHandoff(op), err: h.fail(ctx, p.SessionID, "hook panicked")}
+			}
+			h.close()
+			done <- res
+		}()
+		res = h.syncStart(ctx, op, p, r)
+	}()
+	select {
+	case res := <-done:
+		h.writeSessionStart(res.text, p, stdout)
+		return res.err
+	case <-ctx.Done():
+		h.log.Warn("session start timed out, minimal handoff written", "event", h.event, "session_id", p.SessionID)
+		h.writeSessionStart(minimalHandoff(op), p, stdout)
+		return errors.New("session start timed out")
 	}
-	return nil
+}
+
+func (h *handler) syncStart(ctx context.Context, op Op, p Payload, r *redact.Redactor) startResult {
+	st, written, err := h.persist(ctx, op, p, r)
+	if st == nil || err != nil {
+		return startResult{err: err}
+	}
+	if written {
+		h.gc(ctx, st, p)
+	}
+	if h.d.SessionStartOutput == nil {
+		return startResult{}
+	}
+	return startResult{text: h.d.SessionStartOutput(ctx, st, op, p)}
+}
+
+func minimalHandoff(op Op) string {
+	return handoff.Build(handoff.Input{Project: op.Project})
 }
 
 func (h *handler) capture(ctx context.Context, st *store.Store, r *redact.Redactor, op Op) error {
@@ -116,8 +178,7 @@ func (h *handler) capture(ctx context.Context, st *store.Store, r *redact.Redact
 }
 
 func (h *handler) gc(ctx context.Context, st *store.Store, p Payload) {
-	retention := time.Duration(h.d.Cfg.RetentionDays) * 24 * time.Hour
-	deleted, ran, err := st.GC(ctx, h.now(), retention, false)
+	deleted, ran, err := st.GC(ctx, h.now(), h.d.Cfg.Retention(), false)
 	if err != nil {
 		h.log.Warn("gc failed", "event", h.event, "session_id", p.SessionID, "error", err.Error())
 		return
@@ -127,11 +188,7 @@ func (h *handler) gc(ctx context.Context, st *store.Store, p Payload) {
 	}
 }
 
-func (h *handler) sessionStart(ctx context.Context, st *store.Store, op Op, p Payload, stdout io.Writer) {
-	if h.d.SessionStartOutput == nil {
-		return
-	}
-	text := h.d.SessionStartOutput(ctx, st, op, p)
+func (h *handler) writeSessionStart(text string, p Payload, stdout io.Writer) {
 	if text == "" {
 		return
 	}

@@ -466,3 +466,71 @@ func TestWriteRejectsBadName(t *testing.T) {
 		}
 	}
 }
+
+func TestCommitRemovesStaleIndexLock(t *testing.T) {
+	needGit(t)
+	r := newRepo(t)
+	if err := r.Write("a.md", []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit("save a", "a.md"); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(r.Dir, ".git", "index.lock")
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Write("b.md", []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit("save b", "b.md"); err != nil {
+		t.Fatalf("Commit with stale index.lock: %v", err)
+	}
+	if got := gitOut(t, r.Dir, "log", "--format=%s", "-1"); got != "save b" {
+		t.Errorf("last commit = %q", got)
+	}
+
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Write("c.md", []byte("c")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit("save c", "c.md"); err == nil {
+		t.Error("Commit removed a fresh index.lock")
+	}
+	if _, err := os.Stat(lock); err != nil {
+		t.Errorf("fresh index.lock: %v", err)
+	}
+}
+
+func TestCommitDisablesFSMonitor(t *testing.T) {
+	needGit(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("shell hooks")
+	}
+	r := newRepo(t)
+	marker := filepath.Join(t.TempDir(), "fsmonitor-ran")
+	monitor := filepath.Join(t.TempDir(), "fsmonitor")
+	if err := os.WriteFile(monitor, []byte("#!/bin/sh\ntouch "+marker+"\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("GIT_CONFIG_GLOBAL"), []byte("[core]\n\tfsmonitor = "+monitor+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.md", "b.md"} {
+		if err := r.Write(name, []byte(name)); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Commit("save "+name, name); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("fsmonitor hook ran: %v", err)
+	}
+}

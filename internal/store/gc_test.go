@@ -188,3 +188,23 @@ func TestGCInvalidLastGCRuns(t *testing.T) {
 		t.Errorf("GC = (%d, %v), want (1, true)", deleted, ran)
 	}
 }
+
+func TestGCLastRunInFutureIsDue(t *testing.T) {
+	ctx := context.Background()
+	s := openGCTemp(t)
+	future := strconv.FormatInt(gcNow.Add(30*day).Unix(), 10)
+	if _, err := s.db.Exec("INSERT INTO meta (key, value) VALUES ('last_gc', ?)", future); err != nil {
+		t.Fatal(err)
+	}
+	insertAt(t, s, "old", gcNow.Add(-100*day))
+	deleted, ran, err := s.GC(ctx, gcNow, 90*day, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ran || deleted != 1 {
+		t.Errorf("GC = (%d, %v), want (1, true)", deleted, ran)
+	}
+	if v, _ := lastGC(t, s); v != strconv.FormatInt(gcNow.Unix(), 10) {
+		t.Errorf("last_gc = %q, want %d", v, gcNow.Unix())
+	}
+}

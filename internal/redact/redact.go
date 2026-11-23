@@ -83,7 +83,7 @@ func (p pattern) apply(s string) string {
 	last := 0
 	for _, m := range matches {
 		start, end := m[2*p.secretGroup], m[2*p.secretGroup+1]
-		if start < 0 {
+		if start < 0 || start == end {
 			continue
 		}
 		b.WriteString(s[last:start])

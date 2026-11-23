@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -35,20 +34,20 @@ type searchIn struct {
 	Query   string `json:"query" jsonschema:"Words to look for. Empty lists the most recent items."`
 	Type    string `json:"type,omitempty" jsonschema:"Only items of this type, e.g. decision, gotcha, fact, or an observation kind."`
 	Since   string `json:"since,omitempty" jsonschema:"Only items created since YYYY-MM-DD or in the last <N>d, e.g. 7d."`
-	Project string `json:"project,omitempty" jsonschema:"Name or key of another project. Omit it unless the user explicitly asks about another project: by default only the current project and user-wide memories are visible."`
-	Limit   int    `json:"limit,omitempty" jsonschema:"Maximum number of lines, default 10, at most 50."`
+	Project string `json:"project,omitempty" jsonschema:"Another project's name or key. Omit it unless the user explicitly asks about another project: by default only the current project and user-wide memories are visible."`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Maximum lines, default 10, at most 50."`
 }
 
 type timelineIn struct {
 	ID      string `json:"id" jsonschema:"An id returned by search."`
-	Before  *int   `json:"before,omitempty" jsonschema:"Items to show before the id, default 5, at most 20."`
-	After   *int   `json:"after,omitempty" jsonschema:"Items to show after the id, default 5, at most 20."`
-	Project string `json:"project,omitempty" jsonschema:"Name or key of another project. Omit it unless the user explicitly asks about another project: by default only the current project and user-wide memories are visible."`
+	Before  *int   `json:"before,omitempty" jsonschema:"Items before the id, default 5, at most 20."`
+	After   *int   `json:"after,omitempty" jsonschema:"Items after the id, default 5, at most 20."`
+	Project string `json:"project,omitempty" jsonschema:"Another project's name or key. Omit it unless the user explicitly asks about another project: by default only the current project and user-wide memories are visible."`
 }
 
 type getIn struct {
 	IDs     []string `json:"ids" jsonschema:"Ids chosen from search or timeline, at most 20."`
-	Project string   `json:"project,omitempty" jsonschema:"Name or key of another project. Omit it unless the user explicitly asks about another project: by default only the current project and user-wide memories are visible."`
+	Project string   `json:"project,omitempty" jsonschema:"Another project's name or key. Omit it unless the user explicitly asks about another project: by default only the current project and user-wide memories are visible."`
 }
 
 type saveIn struct {
@@ -86,15 +85,15 @@ func New(d Deps) *mcp.Server {
 	}
 	s := &server{Deps: d}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "mem-engine", Version: d.Version}, &mcp.ServerOptions{Logger: d.Log})
-	mcp.AddTool(srv, &mcp.Tool{Name: "search", Description: "Step 1 of 3: search long-term memory, curated memories and observations captured in past sessions, of the current project plus user-wide memories. " +
-		"Returns one short line per item: <id> <date> <type> <title> | <summary>. " +
-		"Next, call timeline on an interesting id for context, then get only for the ids you need in full."}, handle(s, "search", s.search))
-	mcp.AddTool(srv, &mcp.Tool{Name: "timeline", Description: "Step 2 of 3: show what happened around an id from search, the items of the same session before and after it, in the search line format with the id marked by >. " +
+	mcp.AddTool(srv, &mcp.Tool{Name: "search", Description: "Step 1 of 3: search curated memories and past-session observations of the current project plus user-wide memories. " +
+		"Returns one line per item: <id> <date> <type> <title> | <summary>. " +
+		"Next, call timeline on an id for context, then get only for the ids you need in full."}, handle(s, "search", s.search))
+	mcp.AddTool(srv, &mcp.Tool{Name: "timeline", Description: "Step 2 of 3: list the items of the same session before and after an id from search, in the search line format, the id marked by >. " +
 		"Next, call get only for the ids you need in full."}, handle(s, "timeline", s.timeline))
-	mcp.AddTool(srv, &mcp.Tool{Name: "get", Description: "Step 3 of 3: fetch the full content, header and body, of the ids chosen from search or timeline. " +
-		"The whole response is limited to 20000 bytes and ids that do not fit are listed at the end, so ask only for what you need."}, handle(s, "get", s.get))
-	mcp.AddTool(srv, &mcp.Tool{Name: "save", Description: "Save a curated memory that future sessions should know: a durable fact, decision, gotcha, preference or reference. " +
-		"Use this instead of writing memory files such as MEMORY.md. Recommended types: fact, decision, gotcha, preference, reference. " +
+	mcp.AddTool(srv, &mcp.Tool{Name: "get", Description: "Step 3 of 3: fetch the full content of ids chosen from search or timeline. " +
+		"The response is capped at 20000 bytes and ids that do not fit are listed at the end, so ask only for what you need."}, handle(s, "get", s.get))
+	mcp.AddTool(srv, &mcp.Tool{Name: "save", Description: "Save a durable memory for future sessions: a fact, decision, gotcha, preference or reference. " +
+		"Use this instead of writing memory files such as MEMORY.md. " +
 		"scope project (default) ties it to the current project, user makes it visible in every project. Returns the new id."}, handle(s, "save", s.save))
 	mcp.AddTool(srv, &mcp.Tool{Name: "update", Description: "Change a memory saved earlier, by id. Only the fields given change; tags replace the previous list."}, handle(s, "update", s.update))
 	mcp.AddTool(srv, &mcp.Tool{Name: "forget", Description: "Delete a memory saved earlier, by id. Observations captured from sessions cannot be deleted."}, handle(s, "forget", s.forget))
@@ -120,7 +119,7 @@ func (s *server) scope(ctx context.Context, name string) (store.Scope, error) {
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Scope{}, userErrorf("unknown project %q", name)
 	}
-	if err != nil && strings.Contains(err.Error(), " is ambiguous") {
+	if errors.Is(err, store.ErrAmbiguous) {
 		return store.Scope{}, userError(err.Error())
 	}
 	if err != nil {

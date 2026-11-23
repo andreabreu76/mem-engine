@@ -108,7 +108,7 @@ func (s *Server) scope(r *http.Request) (store.Scope, error) {
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Scope{}, badRequest("unknown project")
 	}
-	if err != nil && strings.Contains(err.Error(), " is ambiguous") {
+	if errors.Is(err, store.ErrAmbiguous) {
 		return store.Scope{}, badRequest(err.Error())
 	}
 	if err != nil {

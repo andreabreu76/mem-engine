@@ -502,3 +502,24 @@ func TestGetCutsSingleOversizedItem(t *testing.T) {
 		t.Errorf("out ends with %q", out[len(out)-200:])
 	}
 }
+
+func TestToolsPayloadMatchesListTools(t *testing.T) {
+	f := newFixture(t)
+	res, err := f.connect(t, billing).ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want bytes.Buffer
+	enc := json.NewEncoder(&want)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(res.Tools); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ToolsPayload(context.Background())
+	if err != nil {
+		t.Fatalf("ToolsPayload: %v", err)
+	}
+	if string(got) != strings.TrimSuffix(want.String(), "\n") {
+		t.Errorf("ToolsPayload =\n%s\nwant\n%s", got, want.String())
+	}
+}

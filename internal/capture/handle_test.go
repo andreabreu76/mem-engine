@@ -536,3 +536,66 @@ func TestHandleSessionStartGCErrorIgnored(t *testing.T) {
 		t.Errorf("observations = %d, want 1", n)
 	}
 }
+
+func sessionStartContext(t *testing.T, out string) string {
+	t.Helper()
+	var got struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("stdout %q is not JSON: %v", out, err)
+	}
+	if got.HookSpecificOutput.HookEventName != "SessionStart" {
+		t.Errorf("hookEventName = %q", got.HookSpecificOutput.HookEventName)
+	}
+	return got.HookSpecificOutput.AdditionalContext
+}
+
+func TestHandleSessionStartTimeoutPrintsMinimalHandoff(t *testing.T) {
+	d := testDeps(t)
+	d.SessionStartTimeout = 100 * time.Millisecond
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	d.SessionStartOutput = func(context.Context, *store.Store, Op, Payload) string {
+		select {
+		case <-release:
+		case <-time.After(3 * time.Second):
+		}
+		return "late handoff"
+	}
+	cwd := filepath.Join(t.TempDir(), "billing-api")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	out, _ := handle(t, d, "SessionStart", payloadJSON(t, Payload{SessionID: "s1", Cwd: cwd, Source: "startup"}))
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("SessionStart took %v, want about 100ms", elapsed)
+	}
+	want := "mem-engine | project billing-api\nLookup: search -> timeline -> get (memory tools of this project)."
+	if got := sessionStartContext(t, out); got != want {
+		t.Errorf("additionalContext = %q, want %q", got, want)
+	}
+	if !strings.Contains(readLog(t, d.Cfg), "session start timed out") {
+		t.Errorf("log = %s", readLog(t, d.Cfg))
+	}
+}
+
+func TestHandleSessionStartPanicPrintsMinimalHandoff(t *testing.T) {
+	d := testDeps(t)
+	d.SessionStartOutput = func(context.Context, *store.Store, Op, Payload) string { panic("boom") }
+	cwd := filepath.Join(t.TempDir(), "billing-api")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := handle(t, d, "SessionStart", payloadJSON(t, Payload{SessionID: "s1", Cwd: cwd, Source: "startup"}))
+	if got := sessionStartContext(t, out); !strings.HasPrefix(got, "mem-engine | project billing-api\n") {
+		t.Errorf("additionalContext = %q", got)
+	}
+	if n, last := captureErrors(t, d.Cfg); n != 1 || last != "hook panicked" {
+		t.Errorf("capture errors = %d, %q", n, last)
+	}
+}

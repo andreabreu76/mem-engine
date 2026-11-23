@@ -38,6 +38,6 @@ func gc() (int64, error) {
 		return 0, err
 	}
 	defer st.Close()
-	deleted, _, err := st.GC(context.Background(), time.Now(), time.Duration(cfg.RetentionDays)*24*time.Hour, true)
+	deleted, _, err := st.GC(context.Background(), time.Now(), cfg.Retention(), true)
 	return deleted, err
 }

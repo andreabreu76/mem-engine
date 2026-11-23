@@ -19,6 +19,8 @@ install -m 0755 mem ~/.local/bin/mem
 mem version
 ```
 
+On Windows, in PowerShell: `Expand-Archive mem-engine_<version>_windows_amd64.zip -DestinationPath "$HOME\bin\mem-engine"`, then add that folder to your user `PATH` with `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ";$HOME\bin\mem-engine", 'User')` and open a new terminal.
+
 ### With Go
 
 Requires Go 1.26 or newer. The binary is pure Go (no cgo).
@@ -111,15 +113,18 @@ Checks: `binary` (the `mem` on `PATH` is the one running), `config` (`config.tom
 mem bench [path] [--native file]
 ```
 
-Compares what Claude Code's native memory loads at the start of every session with the handoff mem-engine injects instead. The native side is the project's `MEMORY.md` under `~/.claude/projects/<encoded repository root>/memory/` (the git root of `path`, groups and aliases do not apply), counted the way Claude Code loads it: the first 200 lines, at most 25 KB. The mem-engine side is the handoff a new session of the project would receive now (at most 1200 bytes). Tokens are estimated as bytes / 4. `path` defaults to the working directory and `--native` points to another `MEMORY.md`.
+Compares what Claude Code's native memory loads at the start of every session with what mem-engine costs instead. The native side is the project's `MEMORY.md` under `~/.claude/projects/<encoded repository root>/memory/` (the git root of `path`, groups and aliases do not apply), counted the way Claude Code loads it: the first 200 lines, at most 25 KB. The mem-engine side has two parts: the handoff a new session of the project would receive now (at most 1200 bytes) and the fixed cost of every session, the `tools/list` payload of the MCP server plus the name and description of the plugin skill, counted in full. The saving compares the native load with the sum of both. Tokens are estimated as bytes / 4. `path` defaults to the working directory and `--native` points to another `MEMORY.md`.
+
+For a project with a 192-line `MEMORY.md` and one previous session:
 
 ```
-native MEMORY.md: 18432 bytes loaded (~4608 tokens)
-mem-engine handoff: 612 bytes (~153 tokens)
-saving: ~4455 tokens per session (97%)
+native MEMORY.md: 16788 bytes loaded (~4197 tokens)
+mem-engine handoff: 379 bytes (~94 tokens)
+mcp tools + skill: 4448 bytes (~1112 tokens)
+saving: ~2991 tokens per session (71%)
 ```
 
-When the project has no `MEMORY.md`, only the handoff line is printed. A handoff larger than the native file shows a negative saving. The native file is read locally and nothing is sent anywhere, and `mem bench` never creates the data directory or the database: without `mem.db` it measures the minimal handoff of an empty project.
+When the project has no `MEMORY.md`, only the handoff and fixed cost lines are printed. With a small `MEMORY.md` the fixed cost dominates and the saving is negative: mem-engine pays off once `MEMORY.md` loads more than about 5 KB, and its handoff stays capped while `MEMORY.md` keeps growing. The native file is read locally and nothing is sent anywhere, and `mem bench` never creates the data directory or the database: without `mem.db` it measures the minimal handoff of an empty project.
 
 ## Migrating from native memory
 
@@ -231,6 +236,15 @@ No groups or aliases are defined by default.
 ## Privacy
 
 Everything stays on your machine: nothing captured is sent to any external service. Captured observations and curated memories (`save`, `update`, the viewer and `mem import`) go through the same redaction before any write to the database, the spool, the log or the wiki: text inside `<private>...</private>` tags is removed, and builtin patterns redact common secrets (tokens, keys, passwords in URLs) in titles, summaries, bodies and tags. Add your own patterns with `redact_extra`.
+
+The builtin list does not cover `Authorization: Bearer` headers or `.env` style assignments such as `DB_PASSWORD=` and `API_SECRET=`. Add them to `config.toml` if they show up in your sessions; a named group `secret` redacts only that part of the match:
+
+```toml
+redact_extra = [
+  '(?i)authorization:\s*bearer\s+(?P<secret>[A-Za-z0-9._~+/=-]+)',
+  '(?m)^\s*\w*(?:PASSWORD|SECRET)\w*\s*=\s*(?P<secret>\S+)',
+]
+```
 
 `forget` deletes the memory file and its index entry, but the wiki of each project is a local git repository, so earlier versions of the file stay in its history. To purge them, close Claude Code and `mem ui`, then rewrite the history of that project's wiki, for example with [git-filter-repo](https://github.com/newren/git-filter-repo):
 

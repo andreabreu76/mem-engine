@@ -328,3 +328,16 @@ func TestTruncateShort(t *testing.T) {
 		t.Errorf("Truncate = %q", got)
 	}
 }
+
+func TestExtraSkipsZeroLengthMatches(t *testing.T) {
+	r := mustNew(t, []string{`a*`, `(?P<secret>x?)y`}, true)
+	if got := r.Clean("bcd"); got != "bcd" {
+		t.Errorf("Clean(bcd) = %q, want unchanged", got)
+	}
+	if got, want := r.Clean("baab"), "b[REDACTED:extra]b"; got != want {
+		t.Errorf("Clean(baab) = %q, want %q", got, want)
+	}
+	if got, want := r.Clean("y xy"), "y [REDACTED:extra]y"; got != want {
+		t.Errorf("Clean(y xy) = %q, want %q", got, want)
+	}
+}

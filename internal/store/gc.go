@@ -65,5 +65,5 @@ func gcDue(ctx context.Context, tx *sql.Tx, now time.Time) (bool, error) {
 	if err != nil {
 		return true, nil
 	}
-	return now.Sub(time.Unix(last, 0)) > gcInterval, nil
+	return last > now.Unix() || now.Sub(time.Unix(last, 0)) > gcInterval, nil
 }

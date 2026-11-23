@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andreabreu76/mem-engine/internal/capture"
 	"github.com/andreabreu76/mem-engine/internal/store"
@@ -133,5 +135,26 @@ func TestSessionStartOutputFallsBackOnError(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "build handoff failed") || strings.Contains(logs.String(), "secret prompt text") {
 		t.Errorf("log = %q", logs.String())
+	}
+}
+
+func TestHookCommandPanicRecordsCaptureError(t *testing.T) {
+	home := setHome(t)
+	orig := handleHook
+	t.Cleanup(func() { handleHook = orig })
+	handleHook = func(context.Context, string, io.Reader, io.Writer, capture.Deps) error { panic("boom") }
+
+	var out, errb bytes.Buffer
+	if code := run([]string{"hook", "UserPromptSubmit"}, strings.NewReader(`{}`), &out, &errb); code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	st, err := store.Open(filepath.Join(home, "mem.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	n, last, err := st.CaptureErrorsSince(context.Background(), time.Unix(0, 0))
+	if err != nil || n != 1 || last != "hook panicked" {
+		t.Errorf("capture errors = %d, %q, %v", n, last, err)
 	}
 }

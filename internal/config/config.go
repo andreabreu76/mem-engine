@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -75,6 +76,16 @@ func LoadFrom(home string) (Config, error) {
 		c.Aliases[i].Key = cleanPath(c.Aliases[i].Key)
 	}
 	return c, nil
+}
+
+const MaxRetentionDays = 36500
+
+func (c Config) Retention() time.Duration {
+	days := min(c.RetentionDays, MaxRetentionDays)
+	if days <= 0 {
+		return 0
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 func (c Config) DBPath() string   { return filepath.Join(c.Home, "mem.db") }

@@ -262,8 +262,8 @@ func TestFindProject(t *testing.T) {
 		t.Errorf("FindProject(ambiguous name by key) = %+v, %v", got, err)
 	}
 	_, err := s.FindProject(ctx, "web")
-	if err == nil || errors.Is(err, ErrNotFound) {
-		t.Fatalf("FindProject(ambiguous) err = %v", err)
+	if !errors.Is(err, ErrAmbiguous) || errors.Is(err, ErrNotFound) {
+		t.Fatalf("FindProject(ambiguous) err = %v, want ErrAmbiguous", err)
 	}
 	for _, key := range []string{rows[1].Key, rows[2].Key} {
 		if !strings.Contains(err.Error(), key) {

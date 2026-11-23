@@ -134,6 +134,22 @@ func MergeHooks(settings []byte) ([]byte, bool, error) {
 	return out, true, nil
 }
 
+func DisableNativeMemory(settings []byte) ([]byte, bool, error) {
+	m, err := decodeObject(settings)
+	if err != nil {
+		return nil, false, err
+	}
+	if m[nativeMemoryKey] == false {
+		return settings, false, nil
+	}
+	m[nativeMemoryKey] = false
+	out, err := encode(m)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
 func HasMemHooks(settings []byte) bool {
 	m, err := decodeObject(settings)
 	if err != nil {
@@ -226,6 +242,8 @@ func encode(v any) ([]byte, error) {
 }
 
 const MCPServerName = "mem-engine"
+
+const nativeMemoryKey = "autoMemoryEnabled"
 
 func MCPAddArgs() []string {
 	return []string{"mcp", "add", "--scope", "user", MCPServerName, "--", "mem", "mcp"}

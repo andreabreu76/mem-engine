@@ -431,3 +431,39 @@ func TestMCPAddArgs(t *testing.T) {
 		t.Errorf("MCPAddArgs() = %q, want %q", got, want)
 	}
 }
+
+func TestDisableNativeMemoryIdempotent(t *testing.T) {
+	in := `{"model": "opus", "cleanupPeriodDays": 12345678901234567890, "statusLine": {"command": "echo <a&b>"}, "autoMemoryEnabled": true}`
+	updated, changed, err := DisableNativeMemory([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	m := decodeMap(t, updated)
+	if m["autoMemoryEnabled"] != false || m["model"] != "opus" {
+		t.Errorf("settings = %s", updated)
+	}
+	for _, s := range []string{"12345678901234567890", "echo <a&b>"} {
+		if !strings.Contains(string(updated), s) {
+			t.Errorf("%q not kept:\n%s", s, updated)
+		}
+	}
+
+	again, changed, err := DisableNativeMemory(updated)
+	if err != nil || changed || !bytes.Equal(again, updated) {
+		t.Errorf("second run = %s, %v, %v; want unchanged", again, changed, err)
+	}
+
+	fresh, changed, err := DisableNativeMemory(nil)
+	if err != nil || !changed || decodeMap(t, fresh)["autoMemoryEnabled"] != false {
+		t.Errorf("empty settings = %s, %v, %v", fresh, changed, err)
+	}
+
+	for _, bad := range []string{`{"model": `, `[]`, `{} {}`} {
+		if _, _, err := DisableNativeMemory([]byte(bad)); err == nil {
+			t.Errorf("DisableNativeMemory(%s) err = nil", bad)
+		}
+	}
+}

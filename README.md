@@ -38,6 +38,8 @@ mem setup --plan   # print the hooks and the claude command that would run, chan
 mem setup          # show the plan and ask before applying (--yes skips the prompt)
 ```
 
+`mem setup --disable-native-memory` turns off Claude Code's native auto-memory instead (see [Migrating from native memory](#migrating-from-native-memory)).
+
 To register the MCP server by hand:
 
 ```sh
@@ -141,7 +143,32 @@ notes.md: skipped, no frontmatter
 
 Files without frontmatter, without a `name`, without a `description` or with a type mem-engine does not accept are skipped with a note. Running the import again is safe: a source file already imported into the target (tag `native:<source file>`) is skipped with the note `already imported`, so a run that stopped halfway is finished by running it again. Exit code 0 on success, 1 on error (after printing what was imported until then), 2 on bad arguments.
 
-Once the import looks right, turn off the native memory so Claude Code stops loading `MEMORY.md` next to the mem-engine handoff. The next release adds `mem setup --disable-native-memory` for that step.
+Once the import looks right, turn off the native memory so Claude Code stops loading `MEMORY.md` next to the mem-engine handoff:
+
+```sh
+mem setup --disable-native-memory   # show the change and ask before applying (--yes skips the prompt, --plan only shows it)
+```
+
+It sets `"autoMemoryEnabled": false` in `~/.claude/settings.json` and keeps every other key, with the same confirmation, `settings.json.bak` backup and atomic write as `mem setup`. Hooks and the MCP server are not touched in this mode. Running it again when the native memory is already off changes nothing.
+
+## Projects
+
+A project is identified by its key, the git root of the working directory (or the prefix of a `[[group]]`). When a repository moves or two keys turn out to be the same project, two commands fix it:
+
+```sh
+mem project merge <from> <to> [--yes]
+mem project alias <old-key> <new-path>
+```
+
+`mem project merge` moves everything recorded under `<from>` into `<to>`: each memory file is rewritten in the wiki directory of `<to>` with the new `project` (same id, tags and dates, a suffixed file name when the name is taken) and committed in both wiki repositories, and the observations and sessions move in one database transaction. `<from>` and `<to>` are project names or keys; a name shared by several projects is refused with the list of keys. The command shows what will move and asks before applying (`--yes` skips the prompt), then prints `moved N observations, M memories`. `<from>` is removed from the project list only after all its memories moved. If a step fails, the memories moved until then stay valid and running the same command again continues where it stopped. The `user` scope cannot be merged, nor a project into itself.
+
+`mem project alias` keeps recording a repository under an existing key after it moved, for example from `/home/dev/src/billing-api` to `/home/dev/src/acme/billing-api`:
+
+```sh
+mem project alias /home/dev/src/billing-api /home/dev/src/acme/billing-api
+```
+
+It appends an `[[alias]]` block to `config.toml` (created with mode 0600 when missing, existing content kept). Both arguments must be absolute paths (`~/` is expanded), and a second alias for the same path is refused. Exit code 0 on success, 1 on error, 2 on bad arguments, for both commands.
 
 ## Viewer
 

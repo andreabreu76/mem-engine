@@ -22,6 +22,7 @@ func runSetup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	plan := fs.Bool("plan", false, "print the changes without applying them")
 	yes := fs.Bool("yes", false, "apply without asking for confirmation")
+	disableNative := fs.Bool("disable-native-memory", false, "set autoMemoryEnabled to false in the Claude Code settings")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -38,6 +39,9 @@ func runSetup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "mem setup: %v\n", err)
 		return 1
+	}
+	if *disableNative {
+		return disableNativeMemory(path, current, exists, *plan, *yes, stdin, stdout, stderr)
 	}
 	updated, changed, err := setup.MergeHooks(current)
 	if err != nil {
@@ -92,6 +96,35 @@ func runSetup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stdout, "registered MCP server %s\n", setup.MCPServerName)
+	}
+	return 0
+}
+
+func disableNativeMemory(path string, current []byte, exists, plan, yes bool, stdin io.Reader, stdout, stderr io.Writer) int {
+	updated, changed, err := setup.DisableNativeMemory(current)
+	if err != nil {
+		fmt.Fprintf(stderr, "mem setup: %s: %v\n", path, err)
+		return 1
+	}
+	if !changed {
+		fmt.Fprintf(stdout, "native memory already disabled in %s\n", path)
+		return 0
+	}
+	fmt.Fprintf(stdout, "settings: %s\nto set (other keys are kept):\n  \"autoMemoryEnabled\": false\n", path)
+	if plan {
+		return 0
+	}
+	if !yes && !confirm(stdin, stdout) {
+		fmt.Fprintln(stderr, "mem setup: aborted, nothing written")
+		return 1
+	}
+	if err := setup.WriteSettings(path, updated); err != nil {
+		fmt.Fprintf(stderr, "mem setup: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "updated %s, native memory disabled\n", path)
+	if exists {
+		fmt.Fprintf(stdout, "backup: %s.bak\n", path)
 	}
 	return 0
 }

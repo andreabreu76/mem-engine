@@ -23,8 +23,10 @@ commands:
   hook      record a Claude Code hook event read from stdin
   import    import Claude Code native memory files (<dir> [--project <path-or-name>] [--user] [--dry-run])
   mcp       serve the memory tools to Claude Code over stdio (MCP)
+  project   merge <from> <to> [--yes]: move the memories and observations of a project into another
+            alias <old-key> <new-path>: record a repository under an existing project key
   reindex   rebuild the memory index from the wiki
-  setup     register the mem hooks and the mem-engine MCP server (--plan, --yes)
+  setup     register the mem hooks and the mem-engine MCP server (--plan, --yes, --disable-native-memory)
   ui        serve the local web viewer on 127.0.0.1 ([--port N])
   version   print the mem version
 `
@@ -51,6 +53,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runImport(args[1:], stdout, stderr)
 	case "mcp":
 		return runMCP(args[1:], stderr)
+	case "project":
+		return runProject(args[1:], stdin, stdout, stderr)
 	case "reindex":
 		return runReindex(args[1:], stdout, stderr)
 	case "setup":

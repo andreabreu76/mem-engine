@@ -91,13 +91,18 @@ func (h *handler) run(ctx context.Context, stdin io.Reader, stdout io.Writer) er
 		h.log.Warn("store unavailable, event spooled", "event", h.event, "session_id", p.SessionID, "error", err.Error())
 		return h.spool(ctx, op)
 	}
+	written := true
 	if err := h.capture(ctx, st, r, op); err != nil {
+		written = false
 		h.log.Warn("store write failed, event spooled", "event", h.event, "session_id", p.SessionID, "error", err.Error())
 		if err := h.spool(ctx, op); err != nil {
 			return err
 		}
 	}
 	if h.event == eventSessionStart {
+		if written {
+			h.gc(ctx, st, p)
+		}
 		h.sessionStart(ctx, st, op, p, stdout)
 	}
 	return nil
@@ -108,6 +113,18 @@ func (h *handler) capture(ctx context.Context, st *store.Store, r *redact.Redact
 		return err
 	}
 	return apply(ctx, st, op)
+}
+
+func (h *handler) gc(ctx context.Context, st *store.Store, p Payload) {
+	retention := time.Duration(h.d.Cfg.RetentionDays) * 24 * time.Hour
+	deleted, ran, err := st.GC(ctx, h.now(), retention, false)
+	if err != nil {
+		h.log.Warn("gc failed", "event", h.event, "session_id", p.SessionID, "error", err.Error())
+		return
+	}
+	if ran {
+		h.log.Info("gc completed", "event", h.event, "session_id", p.SessionID, "deleted", deleted)
+	}
 }
 
 func (h *handler) sessionStart(ctx context.Context, st *store.Store, op Op, p Payload, stdout io.Writer) {

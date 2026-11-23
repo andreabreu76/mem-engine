@@ -477,3 +477,62 @@ func TestHandleDrainRedactsSpooledOp(t *testing.T) {
 		t.Errorf("%d rows leak the token", leaks)
 	}
 }
+
+func TestHandleSessionStartRunsGC(t *testing.T) {
+	d := testDeps(t)
+	st, err := store.Open(d.Cfg.DBPath())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	if _, err := st.InsertObservation(context.Background(), store.Observation{SessionID: "s0", Project: "billing-api", Kind: "prompt", Title: "t", Body: "expired", CreatedAt: testNow.Add(-100 * 24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	if _, err := handle(t, d, "SessionStart", payloadJSON(t, Payload{SessionID: "s1", Cwd: t.TempDir(), Source: "startup"})); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	var kinds []string
+	rows, err := rawDB(t, d.Cfg).Query("SELECT kind FROM observations ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		kinds = append(kinds, k)
+	}
+	if len(kinds) != 1 || kinds[0] != "session_start" {
+		t.Errorf("observations after SessionStart = %v, want [session_start]", kinds)
+	}
+}
+
+func TestHandleSessionStartGCErrorIgnored(t *testing.T) {
+	d := testDeps(t)
+	st, err := store.Open(d.Cfg.DBPath())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	st.Close()
+	if _, err := rawDB(t, d.Cfg).Exec("DROP TABLE meta"); err != nil {
+		t.Fatal(err)
+	}
+	d.SessionStartOutput = func(context.Context, *store.Store, Op, Payload) string { return "hi" }
+
+	out, err := handle(t, d, "SessionStart", payloadJSON(t, Payload{SessionID: "s1", Cwd: t.TempDir(), Source: "startup"}))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !strings.Contains(out, `"additionalContext":"hi"`) {
+		t.Errorf("stdout = %q", out)
+	}
+	if !strings.Contains(readLog(t, d.Cfg), "gc failed") {
+		t.Errorf("mem.log has no gc failure: %q", readLog(t, d.Cfg))
+	}
+	if n := countRows(t, d.Cfg, "observations"); n != 1 {
+		t.Errorf("observations = %d, want 1", n)
+	}
+}

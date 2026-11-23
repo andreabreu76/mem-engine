@@ -23,16 +23,18 @@ func Resolve(cwd string, cfg config.Config) (Project, error) {
 	}
 	path := evalExisting(abs)
 
-	key, name, ok := matchGroup(path, cfg.Groups)
-	if !ok {
+	key, name, grouped := matchGroup(path, cfg.Groups)
+	if !grouped {
 		key = gitRoot(path)
-		name = filepath.Base(key)
 	}
 	for _, a := range cfg.Aliases {
-		if filepath.IsAbs(a.Path) && evalOrClean(a.Path) == key {
+		if filepath.IsAbs(a.Path) && filepath.IsAbs(a.Key) && evalOrClean(a.Path) == key {
 			key = a.Key
 			break
 		}
+	}
+	if !grouped {
+		name = filepath.Base(key)
 	}
 	return Project{Key: key, Name: name, Dir: DirName(name, key)}, nil
 }
@@ -150,6 +152,9 @@ func rootFromGitFile(dotGit string) (string, bool) {
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(filepath.Dir(dotGit), gitDir)
 	}
+	if !linksBack(gitDir, dotGit) {
+		return "", false
+	}
 	data, err = os.ReadFile(filepath.Join(gitDir, "commondir"))
 	if err != nil {
 		return "", false
@@ -163,4 +168,16 @@ func rootFromGitFile(dotGit string) (string, bool) {
 		return filepath.Dir(common), true
 	}
 	return common, true
+}
+
+func linksBack(gitDir, dotGit string) bool {
+	data, err := os.ReadFile(filepath.Join(gitDir, "gitdir"))
+	if err != nil {
+		return false
+	}
+	back := strings.TrimSpace(string(data))
+	if !filepath.IsAbs(back) {
+		back = filepath.Join(gitDir, back)
+	}
+	return evalOrClean(back) == evalOrClean(dotGit)
 }

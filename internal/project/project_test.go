@@ -276,3 +276,90 @@ func TestUser(t *testing.T) {
 		t.Errorf("User = %+v", User)
 	}
 }
+
+func TestResolveAliasNameFollowsFinalKey(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	moved := filepath.Join(root, "new", "billing-api-v2")
+	initRepo(t, moved)
+	old := filepath.Join(root, "old", "billing-api")
+	cfg := config.Config{Aliases: []config.Alias{{Path: moved, Key: old}}}
+
+	p := resolve(t, moved, cfg)
+	if p.Name != "billing-api" {
+		t.Errorf("Name = %q, want billing-api", p.Name)
+	}
+	if want := DirName("billing-api", old); p.Dir != want {
+		t.Errorf("Dir = %q, want %q", p.Dir, want)
+	}
+}
+
+func TestResolveAliasKeepsGroupName(t *testing.T) {
+	root := t.TempDir()
+	prefix := filepath.Join(root, "src", "acme")
+	mkdir(t, prefix)
+	old := filepath.Join(root, "old", "acme-legacy")
+	cfg := config.Config{
+		Groups:  []config.Group{{Name: "acme", Prefix: prefix}},
+		Aliases: []config.Alias{{Path: prefix, Key: old}},
+	}
+
+	p := resolve(t, prefix, cfg)
+	if p.Key != old {
+		t.Errorf("Key = %q, want %q", p.Key, old)
+	}
+	if p.Name != "acme" {
+		t.Errorf("Name = %q, want acme", p.Name)
+	}
+}
+
+func TestResolveIgnoresAliasWithRelativeKey(t *testing.T) {
+	cwd := t.TempDir()
+	cfg := config.Config{Aliases: []config.Alias{{Path: cwd, Key: "billing"}}}
+
+	p := resolve(t, cwd, cfg)
+	if want := realPath(t, cwd); p.Key != want {
+		t.Errorf("Key = %q, want %q", p.Key, want)
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveForgedGitFileKeepsOwnDirectory(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim")
+	initRepo(t, victim)
+	git(t, victim, "worktree", "add", "-q", "-b", "feature", filepath.Join(root, "feature"))
+	forged := filepath.Join(root, "forged")
+	mkdir(t, forged)
+	writeFile(t, filepath.Join(forged, ".git"), "gitdir: "+filepath.Join(victim, ".git", "worktrees", "feature")+"\n")
+
+	p := resolve(t, forged, config.Config{})
+	if want := realPath(t, forged); p.Key != want {
+		t.Errorf("Key = %q, want %q", p.Key, want)
+	}
+	if p.Name != "forged" {
+		t.Errorf("Name = %q, want forged", p.Name)
+	}
+}
+
+func TestResolveGitFileWithoutCommonDirKeepsOwnDirectory(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "super", "sub")
+	mkdir(t, sub)
+	gitDir := filepath.Join(root, "super", ".git", "modules", "sub")
+	mkdir(t, gitDir)
+	writeFile(t, filepath.Join(sub, ".git"), "gitdir: ../.git/modules/sub\n")
+	writeFile(t, filepath.Join(gitDir, "gitdir"), filepath.Join(sub, ".git")+"\n")
+
+	p := resolve(t, sub, config.Config{})
+	if want := realPath(t, sub); p.Key != want {
+		t.Errorf("Key = %q, want %q", p.Key, want)
+	}
+}

@@ -163,6 +163,34 @@ func TestCleanAWSEscapedJSON(t *testing.T) {
 	}
 }
 
+func TestCleanAWSEscapedSlash(t *testing.T) {
+	r := mustNew(t, nil, false)
+	head := "abc" + strings.Repeat("w", 10)
+	tail := "def" + strings.Repeat("v", 24)
+	in := `{\"aws_secret_access_key\":\"` + head + `\/` + tail + `\",\"region\":\"x\"}`
+	got := r.Clean(in)
+	if strings.Contains(got, head) || strings.Contains(got, tail) {
+		t.Errorf("Clean(%q) = %q, value kept", in, got)
+	}
+	if want := `{\"aws_secret_access_key\":[REDACTED:aws],\"region\":\"x\"}`; got != want {
+		t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+	}
+}
+
+func TestCleanConnEscapedSlashes(t *testing.T) {
+	r := mustNew(t, nil, false)
+	cases := []struct{ in, want string }{
+		{`postgres:\/\/u:` + "hunter22" + `@h\/x`, `postgres:\/\/u:[REDACTED:conn]@h\/x`},
+		{`postgres:\/\/u:` + "p@ss" + `@h\/x`, `postgres:\/\/u:[REDACTED:conn]@h\/x`},
+		{`redis:\/\/:` + "pw12" + `@h`, `redis:\/\/:[REDACTED:conn]@h`},
+	}
+	for _, tc := range cases {
+		if got := r.Clean(tc.in); got != tc.want {
+			t.Errorf("Clean(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestCleanPGPBlock(t *testing.T) {
 	r := mustNew(t, nil, false)
 	body := strings.Repeat("P", 64)

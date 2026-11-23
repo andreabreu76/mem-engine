@@ -16,12 +16,42 @@ Make sure `$(go env GOPATH)/bin` is on your `PATH`, since the hooks call `mem` b
 
 ## Setup
 
-`mem setup` registers the capture hooks in `~/.claude/settings.json`. Other keys and hooks in that file are kept, existing `mem hook` entries are replaced, and the previous file is saved as `settings.json.bak`.
+`mem setup` registers the capture hooks in `~/.claude/settings.json` and the `mem-engine` MCP server in Claude Code. Other keys and hooks in that file are kept, existing `mem hook` entries are replaced, and the previous file is saved as `settings.json.bak`. The MCP server is registered with the `claude` CLI, and skipped when it is already registered or `claude` is not on `PATH`.
 
 ```sh
-mem setup --plan   # print the hooks that would be registered, write nothing
-mem setup          # show the plan and ask before writing (--yes skips the prompt)
+mem setup --plan   # print the hooks and the claude command that would run, change nothing
+mem setup          # show the plan and ask before applying (--yes skips the prompt)
 ```
+
+To register the MCP server by hand:
+
+```sh
+claude mcp add --scope user mem-engine -- mem mcp
+```
+
+## MCP tools
+
+`mem mcp` serves six tools over stdio. The current project is `$CLAUDE_PROJECT_DIR`, or the working directory when it is unset.
+
+Retrieval is layered to keep context small: `search` first, `timeline` for context around an interesting hit, `get` only for the ids worth reading in full.
+
+| Tool | Parameters | Returns |
+|------|------------|---------|
+| `search` | `query`, `type?`, `since?` (`YYYY-MM-DD` or `7d`), `project?`, `limit?` (10, at most 50) | one line per item: `<id> <date> <type> <title> \| <summary>` |
+| `timeline` | `id`, `before?` (5), `after?` (5), `project?` | the same lines for the items of the same session around `id`, which is marked with `>` |
+| `get` | `ids`, `project?` | header and body of each id, bodies limited to 20000 bytes per call |
+| `save` | `type`, `title`, `summary`, `body`, `tags?`, `scope?` (`project` or `user`) | the new memory id |
+| `update` | `id`, `type?`, `title?`, `summary?`, `body?`, `tags?` | the updated id |
+| `forget` | `id` | the deleted id |
+
+Titles are cut at 80 characters and summaries at 100 in `search` and `timeline` lines. Recommended memory types are `fact`, `decision`, `gotcha`, `preference` and `reference`. A memory saved with `scope: user` is visible in every project.
+
+```
+m-3f9a1c2b4d5e 2026-11-20 decision Invoices use UTC | store invoice dates in UTC, local time broke month-end totals
+o-1042 2026-11-21 tool Bash: go test ./... | ok  billing-api/internal/invoice 0.412s
+```
+
+By default `search`, `timeline` and `get` only see the current project plus `user` memories. `project` takes another project's name or key (for example `billing-api` or `/home/dev/src/acme/billing-api`) and the tool descriptions tell the agent to pass it only when you ask about another project. An unknown or ambiguous name is an error, never a search across all projects, and an id outside the scope answers "not found". `update` and `forget` only act on memories of the current project or `user`.
 
 ## Health
 
@@ -39,9 +69,10 @@ ok    database        /home/dev/.mem-engine/mem.db (schema 1, fts5 ok)
 ok    spool           empty
 ok    capture-errors  none in the last 24h
 ok    hooks           /home/dev/.claude/settings.json
+ok    mcp             mem-engine registered with claude
 ```
 
-Checks: `binary` (the `mem` on `PATH` is the one running), `config` (`config.toml` parses), `data-dir` (writable), `database` (opens, schema version, FTS5), `spool` (events waiting to be written), `capture-errors` (hook failures in the last 24 hours) and `hooks` (registered and up to date). `mem doctor` never creates the data directory or the database. It exits with 1 only when a check fails.
+Checks: `binary` (the `mem` on `PATH` is the one running), `config` (`config.toml` parses), `data-dir` (writable), `database` (opens, schema version, FTS5), `spool` (events waiting to be written), `capture-errors` (hook failures in the last 24 hours), `hooks` (registered and up to date) and `mcp` (`claude mcp get mem-engine` succeeds, skipped when `claude` is not on `PATH`). `mem doctor` never creates the data directory or the database. It exits with 1 only when a check fails.
 
 ## Configuration
 

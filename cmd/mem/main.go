@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 )
 
 var version = "dev"
+
+var runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
 
 const usage = `usage: mem <command>
 
@@ -14,8 +20,9 @@ commands:
   doctor    check the binary, data dir, database, spool, capture errors and hooks
   gc        delete observations older than retention_days
   hook      record a Claude Code hook event read from stdin
+  mcp       serve the memory tools to Claude Code over stdio (MCP)
   reindex   rebuild the memory index from the wiki
-  setup     register the mem hooks in ~/.claude/settings.json (--plan, --yes)
+  setup     register the mem hooks and the mem-engine MCP server (--plan, --yes)
   version   print the mem version
 `
 
@@ -35,6 +42,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runGC(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdin, stdout, stderr)
+	case "mcp":
+		return runMCP(args[1:], stderr)
 	case "reindex":
 		return runReindex(args[1:], stdout, stderr)
 	case "setup":

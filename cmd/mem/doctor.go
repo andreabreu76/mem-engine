@@ -39,6 +39,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		Cfg:        cfg,
 		UserHome:   userHome,
 		LookPath:   exec.LookPath,
+		RunCommand: runCommand,
 		Executable: exe,
 		Now:        time.Now(),
 	}

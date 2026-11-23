@@ -424,3 +424,10 @@ func TestWriteSettingsKeepsSymlink(t *testing.T) {
 		t.Errorf("backup = %q", bak)
 	}
 }
+
+func TestMCPAddArgs(t *testing.T) {
+	want := []string{"mcp", "add", "--scope", "user", "mem-engine", "--", "mem", "mcp"}
+	if got := MCPAddArgs(); strings.Join(got, " ") != strings.Join(want, " ") || len(got) != len(want) {
+		t.Errorf("MCPAddArgs() = %q, want %q", got, want)
+	}
+}

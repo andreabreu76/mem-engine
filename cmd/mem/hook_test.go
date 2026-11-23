@@ -13,6 +13,8 @@ func setHome(t *testing.T) string {
 	t.Setenv("HOME", t.TempDir())
 	home := t.TempDir()
 	t.Setenv("MEM_ENGINE_HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	return home
 }
 

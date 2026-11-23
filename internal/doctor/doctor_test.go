@@ -24,14 +24,18 @@ func newEnv(t *testing.T) Env {
 	dataHome := t.TempDir()
 	t.Setenv("HOME", userHome)
 	t.Setenv("MEM_ENGINE_HOME", dataHome)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 	cfg, err := config.LoadFrom(dataHome)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return Env{
-		Cfg:        cfg,
-		UserHome:   userHome,
-		LookPath:   func(string) (string, error) { return "", errors.New("not found") },
+		Cfg:      cfg,
+		UserHome: userHome,
+		LookPath: func(string) (string, error) { return "", errors.New("not found") },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return nil, errors.New("fake claude: exit status 1")
+		},
 		Executable: filepath.Join(userHome, "bin", "mem"),
 		Now:        time.Now(),
 	}
@@ -84,7 +88,7 @@ func TestDoctorHealthy(t *testing.T) {
 	createDB(t, env)
 
 	checks := Run(context.Background(), env)
-	want := []string{"binary", "config", "data-dir", "database", "spool", "capture-errors", "hooks"}
+	want := []string{"binary", "config", "data-dir", "database", "spool", "capture-errors", "hooks", "mcp"}
 	if len(checks) != len(want) {
 		t.Fatalf("got %d checks, want %d: %+v", len(checks), len(want), checks)
 	}
@@ -247,5 +251,41 @@ func TestDoctorMissingHooks(t *testing.T) {
 	got = find(t, Run(context.Background(), env), "hooks")
 	if got.Level != Warn || !strings.Contains(got.Detail, "invalid JSON") {
 		t.Errorf("invalid settings: hooks = %v %q, want Warn invalid JSON", got.Level, got.Detail)
+	}
+}
+
+func TestDoctorMCP(t *testing.T) {
+	env := newEnv(t)
+	got := find(t, Run(context.Background(), env), "mcp")
+	if got.Level != OK || got.Detail != "claude not found, skipped" {
+		t.Errorf("without claude: mcp = %v %q", got.Level, got.Detail)
+	}
+
+	claude := filepath.Join(env.UserHome, "bin", "claude")
+	env.LookPath = func(name string) (string, error) {
+		if name == "claude" {
+			return claude, nil
+		}
+		return "", errors.New("not found")
+	}
+	var calls []string
+	env.RunCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return []byte("mem-engine:\n  Scope: User config"), nil
+	}
+	got = find(t, Run(context.Background(), env), "mcp")
+	if got.Level != OK || !strings.Contains(got.Detail, "registered") {
+		t.Errorf("registered: mcp = %v %q", got.Level, got.Detail)
+	}
+	if want := claude + " mcp get mem-engine"; len(calls) != 1 || calls[0] != want {
+		t.Errorf("calls = %q, want [%q]", calls, want)
+	}
+
+	env.RunCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("No MCP server found with name: mem-engine"), errors.New("exit status 1")
+	}
+	got = find(t, Run(context.Background(), env), "mcp")
+	if got.Level != Warn || !strings.Contains(got.Detail, "run mem setup") {
+		t.Errorf("not registered: mcp = %v %q, want Warn run mem setup", got.Level, got.Detail)
 	}
 }

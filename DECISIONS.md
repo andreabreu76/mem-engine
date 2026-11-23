@@ -1,5 +1,11 @@
 # DECISIONS
 
+## 23/11/2026, ferramentas MCP de escrita presas ao escopo atual e `mem setup` consultando o `claude` antes de registrar
+
+- Decisão: `update` e `forget` só agem sobre memória do projeto atual ou `user`; id de outro projeto responde "not found", igual a id inexistente. O erro do serviço volta ao agente como resultado com `isError` e o texto do erro, e vai inteiro para o `mem.log`. `mem setup` roda `claude mcp get mem-engine` antes de `claude mcp add` e pula o registro quando já existe ou quando `claude` não está no PATH; `--plan` só imprime o comando. O `claude` é chamado por `runCommand`, variável de pacote em `cmd/mem` que o `TestMain` troca por um falso, e o doctor recebe o mesmo executor em `Env.RunCommand`
+- Por quê: as duas ferramentas não têm parâmetro `project`, então aceitar id de outro projeto abriria escrita fora do isolamento que vale para a leitura e colocaria caminho do wiki de outro projeto na mensagem de erro; `claude mcp add` falha quando o servidor já existe, o que tornaria um segundo `mem setup` um erro; nenhum teste pode executar o `claude` real
+- Alternativa rejeitada: `update`/`forget` por id em qualquer projeto (quebra o isolamento) e `project` também nas ferramentas de escrita (o brief não pede e o agente não precisa)
+
 ## 23/11/2026, commit do wiki isolado da configuração git do usuário
 
 - Decisão: `wiki.Repo` chama o binário `git` com `-C <Dir> --literal-pathspecs -c core.hooksPath=<Dir>/.git/mem-engine-hooks` (diretório vazio) em toda chamada, `--no-verify` no commit, identidade `mem-engine` e `commit.gpgsign=false` via `-c`, e remove `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` e afins do ambiente. O commit usa pathspec (`git add --all -- paths` e `git commit -- paths`), então só entram os arquivos da operação, inclusive a remoção

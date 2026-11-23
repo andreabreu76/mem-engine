@@ -153,3 +153,94 @@ func TestSetupRejectsArgs(t *testing.T) {
 		}
 	}
 }
+
+const mcpAddLine = "claude mcp add --scope user mem-engine -- mem mcp"
+
+func TestSetupPlanShowsMCP(t *testing.T) {
+	setUserHome(t)
+	f := &fakeRunner{reply: func([]string) ([]byte, error) { return nil, nil }}
+	f.install(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"setup", "--plan"}, nil, &out, &errb); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), mcpAddLine) {
+		t.Errorf("stdout = %q, want %q", out.String(), mcpAddLine)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("--plan ran %q", f.calls)
+	}
+}
+
+func TestSetupRegistersMCP(t *testing.T) {
+	path := setUserHome(t)
+	f := &fakeRunner{reply: func(args []string) ([]byte, error) {
+		if args[1] == "get" {
+			return exitError("No MCP server found with name: mem-engine")
+		}
+		return []byte("Added stdio MCP server mem-engine"), nil
+	}}
+	f.install(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"setup", "--yes"}, nil, &out, &errb); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb.String())
+	}
+	want := []string{"claude mcp get mem-engine", mcpAddLine}
+	if strings.Join(f.calls, "\n") != strings.Join(want, "\n") {
+		t.Errorf("calls = %q, want %q", f.calls, want)
+	}
+	if data, err := os.ReadFile(path); err != nil || !setup.HasMemHooks(data) {
+		t.Errorf("settings = %s, err %v", data, err)
+	}
+	if !strings.Contains(out.String(), "registered MCP server mem-engine") {
+		t.Errorf("stdout = %q", out.String())
+	}
+}
+
+func TestSetupMCPAlreadyRegistered(t *testing.T) {
+	setUserHome(t)
+	f := &fakeRunner{reply: func([]string) ([]byte, error) { return []byte("mem-engine:"), nil }}
+	f.install(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"setup", "--yes"}, nil, &out, &errb); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb.String())
+	}
+	if len(f.calls) != 1 || f.calls[0] != "claude mcp get mem-engine" {
+		t.Errorf("calls = %q", f.calls)
+	}
+	f.calls = nil
+	out.Reset()
+	if code := run([]string{"setup"}, strings.NewReader(""), &out, &errb); code != 0 {
+		t.Fatalf("nothing to do: code = %d, stderr = %q", code, errb.String())
+	}
+	if strings.Contains(out.String(), "[y/N]") || !strings.Contains(out.String(), "already registered") {
+		t.Errorf("nothing to do: stdout = %q", out.String())
+	}
+}
+
+func TestSetupMCPAddFails(t *testing.T) {
+	setUserHome(t)
+	f := &fakeRunner{reply: func([]string) ([]byte, error) { return exitError("add failed: config locked") }}
+	f.install(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"setup", "--yes"}, nil, &out, &errb); code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "config locked") {
+		t.Errorf("stderr = %q", errb.String())
+	}
+}
+
+func TestSetupWithoutClaude(t *testing.T) {
+	path := setUserHome(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"setup", "--yes"}, nil, &out, &errb); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "claude not found") || !strings.Contains(errb.String(), mcpAddLine) {
+		t.Errorf("stderr = %q", errb.String())
+	}
+	if data, err := os.ReadFile(path); err != nil || !setup.HasMemHooks(data) {
+		t.Errorf("settings = %s, err %v", data, err)
+	}
+}

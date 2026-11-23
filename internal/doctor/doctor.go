@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/andreabreu76/mem-engine/internal/config"
@@ -44,6 +46,7 @@ type Env struct {
 	Cfg        config.Config
 	UserHome   string
 	LookPath   func(string) (string, error)
+	RunCommand func(ctx context.Context, name string, args ...string) ([]byte, error)
 	Executable string
 	Now        time.Time
 }
@@ -58,7 +61,10 @@ var checks = []checkFunc{
 	checkSpool,
 	checkCaptureErrors,
 	checkHooks,
+	checkMCP,
 }
+
+const mcpTimeout = 30 * time.Second
 
 func Run(ctx context.Context, env Env) []Check {
 	out := make([]Check, 0, len(checks))
@@ -226,5 +232,28 @@ func checkHooks(_ context.Context, env Env) Check {
 	default:
 		c.Detail = path
 	}
+	return c
+}
+
+func checkMCP(ctx context.Context, env Env) Check {
+	c := Check{Name: "mcp"}
+	claude, err := env.LookPath("claude")
+	if err != nil {
+		c.Detail = "claude not found, skipped"
+		return c
+	}
+	runCmd := env.RunCommand
+	if runCmd == nil {
+		runCmd = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return exec.CommandContext(ctx, name, args...).CombinedOutput()
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, mcpTimeout)
+	defer cancel()
+	if _, err := runCmd(ctx, claude, setup.MCPGetArgs()...); err != nil {
+		c.Level, c.Detail = Warn, "claude "+strings.Join(setup.MCPGetArgs(), " ")+" failed, run mem setup"
+		return c
+	}
+	c.Detail = setup.MCPServerName + " registered with claude"
 	return c
 }

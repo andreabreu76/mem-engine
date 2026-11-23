@@ -224,3 +224,13 @@ func encode(v any) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
+const MCPServerName = "mem-engine"
+
+func MCPAddArgs() []string {
+	return []string{"mcp", "add", "--scope", "user", MCPServerName, "--", "mem", "mcp"}
+}
+
+func MCPGetArgs() []string {
+	return []string{"mcp", "get", MCPServerName}
+}

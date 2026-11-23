@@ -777,3 +777,41 @@ func TestSaveDuringReindexEndsUpInIndex(t *testing.T) {
 		t.Errorf("memory saved during reindex missing from index (reindex report %+v): %v", rep, err)
 	}
 }
+
+func TestSaveIntoNewProjectDuringReindexEndsUpInIndex(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if _, err := f.svc.Save(ctx, billing, defaultInput()); err != nil {
+		t.Fatal(err)
+	}
+	ledger := project.Project{Key: "/home/dev/src/ledger", Name: "ledger", Dir: project.DirName("ledger", "/home/dev/src/ledger")}
+	type result struct {
+		m   store.Memory
+		err error
+	}
+	done := make(chan result, 1)
+	f.svc.beforeReplace = func() {
+		go func() {
+			in := defaultInput()
+			in.Title = "Saved into a new project during reindex"
+			m, err := f.svc.Save(ctx, ledger, in)
+			done <- result{m, err}
+		}()
+		select {
+		case r := <-done:
+			done <- r
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	rep, err := f.svc.Reindex(ctx)
+	if err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("concurrent Save: %v", r.err)
+	}
+	if _, err := f.svc.Store.GetMemory(ctx, r.m.ID); err != nil {
+		t.Errorf("memory saved into a new project during reindex missing from index (reindex report %+v): %v", rep, err)
+	}
+}

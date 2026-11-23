@@ -86,7 +86,7 @@ ok    hooks-duplicated  none
 ok    mcp               mem-engine registered with claude
 ```
 
-Checks: `binary` (the `mem` on `PATH` is the one running), `config` (`config.toml` parses), `data-dir` (writable), `database` (opens, schema version, FTS5), `spool` (events waiting to be written), `capture-errors` (hook failures in the last 24 hours), `hooks` (registered and up to date), `hooks-duplicated` (mem hooks in `settings.json` while the `mem-engine` plugin is also enabled) and `mcp` (`claude mcp get mem-engine` succeeds, skipped when `claude` is not on `PATH`). `mem doctor` never creates the data directory or the database. It exits with 1 only when a check fails.
+Checks: `binary` (the `mem` on `PATH` is the one running), `config` (`config.toml` parses), `data-dir` (writable), `database` (opens, schema version, FTS5), `spool` (events waiting to be written), `capture-errors` (hook failures in the last 24 hours), `hooks` (registered and up to date), `hooks-duplicated` (mem hooks in `settings.json` while the `mem-engine` plugin is also enabled) and `mcp` (`claude mcp get mem-engine` succeeds, skipped when `claude` is not on `PATH`). With the `mem-engine` plugin enabled, `hooks` and `mcp` report `provided by plugin mem-engine@<marketplace>` instead of asking for `mem setup`. `mem doctor` never creates the data directory or the database. It exits with 1 only when a check fails.
 
 ## Benchmark
 

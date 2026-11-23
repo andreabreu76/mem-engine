@@ -342,3 +342,64 @@ func TestDoctorDuplicatedHooks(t *testing.T) {
 		})
 	}
 }
+
+func TestDoctorPluginProvidesHooksAndMCP(t *testing.T) {
+	env := newEnv(t)
+	createDB(t, env)
+	settings := filepath.Join(env.UserHome, ".claude", "settings.json")
+	env.LookPath = func(name string) (string, error) {
+		if name == "claude" {
+			return filepath.Join(env.UserHome, "bin", "claude"), nil
+		}
+		return "", errors.New("not found")
+	}
+	calls := 0
+	env.RunCommand = func(context.Context, string, ...string) ([]byte, error) {
+		calls++
+		return nil, errors.New("exit status 1")
+	}
+
+	writeFile(t, settings, `{"enabledPlugins": {"mem-engine@zeta": true, "mem-engine@acme": true, "mem-engine@beta": false}}`)
+	checks := Run(context.Background(), env)
+	for _, name := range []string{"hooks", "mcp"} {
+		got := find(t, checks, name)
+		if got.Level != OK || got.Detail != "provided by plugin mem-engine@acme" {
+			t.Errorf("plugin only: %s = %v %q, want OK provided by plugin mem-engine@acme", name, got.Level, got.Detail)
+		}
+	}
+	if got := find(t, checks, "hooks-duplicated"); got.Level != OK {
+		t.Errorf("plugin only: hooks-duplicated = %v %q, want OK", got.Level, got.Detail)
+	}
+	if calls != 0 {
+		t.Errorf("plugin only: claude ran %d times, want 0", calls)
+	}
+
+	hooks, _, err := setup.MergeHooks([]byte(`{"enabledPlugins": {"mem-engine@zeta": true, "mem-engine@acme": true}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, settings, string(hooks))
+	checks = Run(context.Background(), env)
+	if got := find(t, checks, "hooks"); got.Level != OK || got.Detail != settings {
+		t.Errorf("both: hooks = %v %q, want OK %s", got.Level, got.Detail, settings)
+	}
+	if got := find(t, checks, "mcp"); got.Level != OK || got.Detail != "provided by plugin mem-engine@acme" {
+		t.Errorf("both: mcp = %v %q, want OK provided by plugin", got.Level, got.Detail)
+	}
+	got := find(t, checks, "hooks-duplicated")
+	if got.Level != Warn || !strings.Contains(got.Detail, "plugin mem-engine@acme ") {
+		t.Errorf("both: hooks-duplicated = %v %q, want Warn naming mem-engine@acme", got.Level, got.Detail)
+	}
+
+	writeFile(t, settings, `{"enabledPlugins": {"mem-engine@acme": false}}`)
+	checks = Run(context.Background(), env)
+	if got := find(t, checks, "hooks"); got.Level != Warn || !strings.Contains(got.Detail, "run mem setup") {
+		t.Errorf("neither: hooks = %v %q, want Warn run mem setup", got.Level, got.Detail)
+	}
+	if got := find(t, checks, "mcp"); got.Level != Warn || !strings.Contains(got.Detail, "run mem setup") {
+		t.Errorf("neither: mcp = %v %q, want Warn run mem setup", got.Level, got.Detail)
+	}
+	if calls != 1 {
+		t.Errorf("claude ran %d times, want 1 (neither only)", calls)
+	}
+}

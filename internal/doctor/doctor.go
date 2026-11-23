@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -217,16 +218,18 @@ func checkCaptureErrors(ctx context.Context, env Env) Check {
 
 func checkHooks(_ context.Context, env Env) Check {
 	c := Check{Name: "hooks"}
-	path := filepath.Join(env.UserHome, ".claude", "settings.json")
-	data, _, err := setup.ReadSettings(path)
+	path, data, err := readUserSettings(env)
 	if err != nil {
 		c.Level, c.Detail = Warn, err.Error()
 		return c
 	}
 	_, changed, err := setup.MergeHooks(data)
+	plugin := enabledPlugin(data)
 	switch {
 	case err != nil:
 		c.Level, c.Detail = Warn, fmt.Sprintf("%s: %v", path, err)
+	case !setup.HasMemHooks(data) && plugin != "":
+		c.Detail = "provided by plugin " + plugin
 	case !setup.HasMemHooks(data):
 		c.Level, c.Detail = Warn, "no mem hooks in "+path+", run mem setup"
 	case changed:
@@ -239,31 +242,53 @@ func checkHooks(_ context.Context, env Env) Check {
 
 const pluginPrefix = "mem-engine@"
 
-func checkHooksDuplicated(_ context.Context, env Env) Check {
-	c := Check{Name: "hooks-duplicated", Detail: "none"}
+func enabledPlugin(settings []byte) string {
+	var s struct {
+		EnabledPlugins map[string]any `json:"enabledPlugins"`
+	}
+	if json.Unmarshal(settings, &s) != nil {
+		return ""
+	}
+	var keys []string
+	for name, enabled := range s.EnabledPlugins {
+		if enabled == true && strings.HasPrefix(name, pluginPrefix) {
+			keys = append(keys, name)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	slices.Sort(keys)
+	return keys[0]
+}
+
+func readUserSettings(env Env) (string, []byte, error) {
 	path := filepath.Join(env.UserHome, ".claude", "settings.json")
 	data, _, err := setup.ReadSettings(path)
+	return path, data, err
+}
+
+func checkHooksDuplicated(_ context.Context, env Env) Check {
+	c := Check{Name: "hooks-duplicated", Detail: "none"}
+	path, data, err := readUserSettings(env)
 	if err != nil || !setup.HasMemHooks(data) {
 		return c
 	}
-	var settings struct {
-		EnabledPlugins map[string]any `json:"enabledPlugins"`
-	}
-	if json.Unmarshal(data, &settings) != nil {
-		return c
-	}
-	for name, enabled := range settings.EnabledPlugins {
-		if enabled == true && strings.HasPrefix(name, pluginPrefix) {
-			c.Level = Warn
-			c.Detail = fmt.Sprintf("mem hooks in %s and plugin %s both run, remove the hooks from settings.json or uninstall the plugin", path, name)
-			return c
-		}
+	if plugin := enabledPlugin(data); plugin != "" {
+		c.Level = Warn
+		c.Detail = fmt.Sprintf("mem hooks in %s and plugin %s both run, remove the hooks from settings.json or uninstall the plugin", path, plugin)
 	}
 	return c
 }
 
 func checkMCP(ctx context.Context, env Env) Check {
 	c := Check{Name: "mcp"}
+	if _, data, err := readUserSettings(env); err == nil {
+		if plugin := enabledPlugin(data); plugin != "" {
+			c.Detail = "provided by plugin " + plugin
+			return c
+		}
+	}
 	claude, err := env.LookPath("claude")
 	if err != nil {
 		c.Detail = "claude not found, skipped"

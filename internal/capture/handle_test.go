@@ -423,3 +423,57 @@ func TestHandleSessionEndWithinBudget(t *testing.T) {
 		t.Errorf("spool.Pending = %d, %v; want 1", n, err)
 	}
 }
+
+func TestHandleSpoolRedactsFiles(t *testing.T) {
+	d := testDeps(t)
+	d.StoreOptions = store.Options{BusyTimeout: 50 * time.Millisecond}
+	lockDB(t, d.Cfg)
+	token := fakeToken()
+	p := Payload{
+		SessionID:    "s1",
+		Cwd:          t.TempDir(),
+		ToolName:     "Write",
+		ToolInput:    json.RawMessage(`{"file_path":"/home/dev/src/billing-api/` + token + `.env","content":"x"}`),
+		ToolResponse: json.RawMessage(`"ok"`),
+	}
+	if _, err := handle(t, d, "PostToolUse", payloadJSON(t, p)); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	content := readSpool(t, d.Cfg)
+	if !strings.Contains(content, "billing-api/") {
+		t.Fatalf("spool lacks the op: %q", content)
+	}
+	if strings.Contains(content, token) {
+		t.Errorf("spool leaks the token: %q", content)
+	}
+}
+
+func TestHandleDrainRedactsSpooledOp(t *testing.T) {
+	d := testDeps(t)
+	token := fakeToken()
+	raw := Op{
+		Project: store.ProjectRow{Key: "/home/dev/src/billing-api", Name: "billing-api", Dir: "billing-api-abc123"},
+		Session: store.SessionEvent{SessionID: "s0", Project: "/home/dev/src/billing-api", Cwd: "/home/dev/" + token, At: testNow},
+		Obs: &store.Observation{SessionID: "s0", Project: "/home/dev/src/billing-api", Kind: "tool", Title: "Edit: " + token, Body: "input: " + token,
+			ToolName: "Edit", Files: []string{"/home/dev/" + token}, CreatedAt: testNow},
+	}
+	if err := spool.Append(d.Cfg.SpoolDir(), raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle(t, d, "UserPromptSubmit", promptPayload(t, t.TempDir(), "current")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if n := countRows(t, d.Cfg, "observations"); n != 2 {
+		t.Fatalf("observations = %d, want 2", n)
+	}
+	var leaks int
+	err := rawDB(t, d.Cfg).QueryRow(`SELECT
+  (SELECT count(*) FROM observations WHERE instr(title || body || files, ?1) > 0) +
+  (SELECT count(*) FROM sessions WHERE instr(coalesce(cwd, ''), ?1) > 0)`, token).Scan(&leaks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaks != 0 {
+		t.Errorf("%d rows leak the token", leaks)
+	}
+}

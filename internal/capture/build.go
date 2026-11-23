@@ -40,7 +40,7 @@ func Build(event string, p Payload, proj project.Project, cfg config.Config, r *
 		Project: store.ProjectRow{Key: proj.Key, Name: proj.Name, Dir: proj.Dir},
 		Session: store.SessionEvent{SessionID: p.SessionID, Project: proj.Key, Cwd: p.Cwd, At: now},
 	}
-	clean := func(s string) string { return r.Clean(strings.ToValidUTF8(s, "�")) }
+	clean := cleaner(r)
 	obs := store.Observation{SessionID: p.SessionID, Project: proj.Key, CreatedAt: now}
 	var title, body string
 	switch event {
@@ -79,14 +79,41 @@ func Build(event string, p Payload, proj project.Project, cfg config.Config, r *
 		obs.Kind, title = "compact", "compact summary"
 	case eventSessionEnd:
 		op.Session.End, op.Session.EndReason = true, p.Reason
-		return op, true, nil
+		return scrub(r, op), true, nil
 	default:
 		return Op{}, false, fmt.Errorf("unknown hook event %q", event)
 	}
-	obs.Title = clean(title)
+	obs.Title = title
 	obs.Body = redact.Truncate(body, cfg.MaxObservationBytes)
 	op.Obs = &obs
-	return op, true, nil
+	return scrub(r, op), true, nil
+}
+
+func scrub(r *redact.Redactor, op Op) Op {
+	clean := cleaner(r)
+	op.Session.Cwd = clean(op.Session.Cwd)
+	op.Session.Source = clean(op.Session.Source)
+	op.Session.EndReason = clean(op.Session.EndReason)
+	if op.Obs == nil {
+		return op
+	}
+	obs := *op.Obs
+	obs.Title = clean(obs.Title)
+	obs.Body = clean(obs.Body)
+	obs.ToolName = clean(obs.ToolName)
+	if obs.Files != nil {
+		files := make([]string, len(obs.Files))
+		for i, f := range obs.Files {
+			files[i] = clean(f)
+		}
+		obs.Files = files
+	}
+	op.Obs = &obs
+	return op
+}
+
+func cleaner(r *redact.Redactor) func(string) string {
+	return func(s string) string { return r.Clean(strings.ToValidUTF8(s, "\uFFFD")) }
 }
 
 func skipTool(name string, patterns []string) bool {

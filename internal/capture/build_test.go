@@ -304,3 +304,35 @@ func TestBuildEditRecordsFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildRedactsAllStoredFields(t *testing.T) {
+	token := fakeToken()
+	op := mustBuild(t, "PostToolUse", Payload{
+		SessionID:    "s1",
+		Cwd:          "/home/dev/src/" + token,
+		ToolName:     "Edit",
+		ToolInput:    json.RawMessage(`{"file_path":"/home/dev/src/billing-api/` + token + `.go","old_string":"x","new_string":"y"}`),
+		ToolResponse: json.RawMessage(`"ok"`),
+	})
+	if len(op.Obs.Files) != 1 || strings.Contains(op.Obs.Files[0], token) {
+		t.Errorf("Files = %v", op.Obs.Files)
+	}
+	if strings.Contains(op.Session.Cwd, token) {
+		t.Errorf("Session.Cwd = %q", op.Session.Cwd)
+	}
+	op = mustBuild(t, "PostToolUse", Payload{SessionID: "s1", ToolName: "mcp__" + token, ToolInput: json.RawMessage(`{}`)})
+	if strings.Contains(op.Obs.ToolName, token) {
+		t.Errorf("ToolName = %q", op.Obs.ToolName)
+	}
+	op = mustBuild(t, "SessionStart", Payload{SessionID: "s1", Source: token})
+	if strings.Contains(op.Session.Source, token) {
+		t.Errorf("Session.Source = %q", op.Session.Source)
+	}
+	op = mustBuild(t, "SessionEnd", Payload{SessionID: "s1", Reason: token})
+	if strings.Contains(op.Session.EndReason, token) {
+		t.Errorf("Session.EndReason = %q", op.Session.EndReason)
+	}
+	if data, _ := json.Marshal(op); strings.Contains(string(data), token) {
+		t.Errorf("op leaks token: %s", data)
+	}
+}

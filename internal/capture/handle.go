@@ -91,7 +91,7 @@ func (h *handler) run(ctx context.Context, stdin io.Reader, stdout io.Writer) er
 		h.log.Warn("store unavailable, event spooled", "event", h.event, "session_id", p.SessionID, "error", err.Error())
 		return h.spool(ctx, op)
 	}
-	if err := h.capture(ctx, st, op); err != nil {
+	if err := h.capture(ctx, st, r, op); err != nil {
 		h.log.Warn("store write failed, event spooled", "event", h.event, "session_id", p.SessionID, "error", err.Error())
 		if err := h.spool(ctx, op); err != nil {
 			return err
@@ -103,8 +103,8 @@ func (h *handler) run(ctx context.Context, stdin io.Reader, stdout io.Writer) er
 	return nil
 }
 
-func (h *handler) capture(ctx context.Context, st *store.Store, op Op) error {
-	if err := h.drain(ctx, st); err != nil {
+func (h *handler) capture(ctx context.Context, st *store.Store, r *redact.Redactor, op Op) error {
+	if err := h.drain(ctx, st, r); err != nil {
 		return err
 	}
 	return apply(ctx, st, op)
@@ -133,7 +133,7 @@ func (h *handler) sessionStart(ctx context.Context, st *store.Store, op Op, p Pa
 	}
 }
 
-func (h *handler) drain(ctx context.Context, st *store.Store) error {
+func (h *handler) drain(ctx context.Context, st *store.Store, r *redact.Redactor) error {
 	_, err := spool.Drain(h.d.Cfg.SpoolDir(), func(line json.RawMessage) error {
 		var op Op
 		if err := json.Unmarshal(line, &op); err != nil {
@@ -142,7 +142,7 @@ func (h *handler) drain(ctx context.Context, st *store.Store) error {
 		if msg := validate(op); msg != "" {
 			return h.discard(ctx, st, op.Session.SessionID, msg+", discarded")
 		}
-		return apply(ctx, st, op)
+		return apply(ctx, st, scrub(r, op))
 	})
 	return err
 }

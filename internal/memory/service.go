@@ -47,6 +47,8 @@ type Service struct {
 
 var ErrInvalid = errors.New("invalid memory")
 
+const forgetAttempts = 3
+
 var (
 	errTitleRequired   = fmt.Errorf("%w: title is required", ErrInvalid)
 	errSummaryRequired = fmt.Errorf("%w: summary is required", ErrInvalid)
@@ -161,23 +163,39 @@ func (s *Service) Update(ctx context.Context, id string, patch Patch) (store.Mem
 }
 
 func (s *Service) Forget(ctx context.Context, id string) error {
-	current, err := s.Store.GetMemory(ctx, id)
-	if err != nil {
-		return fmt.Errorf("forget: %w", err)
+	for range forgetAttempts {
+		current, err := s.Store.GetMemory(ctx, id)
+		if err != nil {
+			return fmt.Errorf("forget: %w", err)
+		}
+		repo, name, err := s.locate(current.Path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return s.Store.DeleteMemory(ctx, id)
+		}
+		if err != nil {
+			return fmt.Errorf("forget %s: %w", id, err)
+		}
+		unlock, err := repo.Lock(ctx)
+		if err != nil {
+			return err
+		}
+		latest, err := s.Store.GetMemory(ctx, id)
+		if err != nil {
+			unlock()
+			return fmt.Errorf("forget: %w", err)
+		}
+		if latest.Path == current.Path && latest.Project == current.Project {
+			err = s.forgetLocked(ctx, repo, name, latest)
+			unlock()
+			return err
+		}
+		unlock()
 	}
-	repo, name, err := s.locate(current.Path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return s.Store.DeleteMemory(ctx, id)
-	}
-	if err != nil {
-		return fmt.Errorf("forget %s: %w", id, err)
-	}
-	unlock, err := repo.Lock(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlock()
+	return fmt.Errorf("forget %s: memory moved during the operation, try again", id)
+}
 
+func (s *Service) forgetLocked(ctx context.Context, repo *wiki.Repo, name string, current store.Memory) error {
+	id := current.ID
 	if _, err := readOwnDoc(repo, name, id); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("forget %s: %s: %w (run mem reindex)", id, current.Path, err)
 	}

@@ -523,3 +523,28 @@ func TestToolsPayloadMatchesListTools(t *testing.T) {
 		t.Errorf("ToolsPayload =\n%s\nwant\n%s", got, want.String())
 	}
 }
+
+func TestGetBoundsLongUnknownIDs(t *testing.T) {
+	f := newFixture(t)
+	id := f.save(t, billing, "Retry policy", "summary", "body")
+	cs := f.connect(t, billing)
+	long := "m-" + strings.Repeat("a", 2000)
+	var onlyLong, mixed []string
+	for i := range maxGetIDs {
+		onlyLong = append(onlyLong, long+itoa(int64(i)))
+	}
+	mixed = append([]string{id}, onlyLong[1:]...)
+	for name, ids := range map[string][]string{"only long": onlyLong, "with a valid id": mixed} {
+		out, isErr := call(t, cs, "get", map[string]any{"ids": ids})
+		if len(out) > getMaxBytes {
+			t.Errorf("%s: get returned %d bytes, want <= %d", name, len(out), getMaxBytes)
+		}
+		if !isErr || len(out) > 120 || strings.Contains(out, long[:40]) {
+			t.Errorf("%s: isError = %v, %d bytes, want a short error without the ids", name, isErr, len(out))
+		}
+	}
+	out := mustCall(t, cs, "get", map[string]any{"ids": []string{id, "m-000000000000", "o-999999"}})
+	if !strings.HasSuffix(out, "not found: m-000000000000, o-999999\n") {
+		t.Errorf("out = %q", out)
+	}
+}

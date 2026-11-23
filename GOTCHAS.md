@@ -1,5 +1,12 @@
 # GOTCHAS
 
+## 23/11/2026, `json.Compact` mantém escapes `\uXXXX` e a redação textual não enxerga `<private>`
+
+- Sintoma: `tool_input` com `"\u003cprivate\u003esegredo\u003c/private\u003e"` ou um token com escape no meio é gravado em claro no corpo da observação, embora o título saia redigido
+- Causa: `json.Compact` só tira espaços; as strings continuam com os escapes do original, e os padrões de redação procuram o texto literal
+- Como lidar: `compactJSON` percorre o JSON por tokens e reescreve cada string com `SetEscapeHTML(false)`, preservando a ordem das chaves (decodificar para `any` reordena as chaves e o corte em 4096 bytes passa a perder campos como `file_path`)
+- Onde: `internal/capture/build.go:154`
+
 ## 23/11/2026, rotação do `mem.log` falha no Windows enquanto `mem mcp` está aberto
 
 - Sintoma: no Windows o `mem.log` passa de 5 MB e continua crescendo; não aparece `mem.log.1`

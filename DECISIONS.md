@@ -1,5 +1,11 @@
 # DECISIONS
 
+## 23/11/2026, `mem setup` compara o settings.json pelo conteúdo decodificado e grava através de symlink
+
+- Decisão: `MergeHooks` decodifica com `UseNumber`, remove as entradas cujo `command` começa com `mem hook `, insere as de `Hooks()` e só reporta mudança se o resultado decodificado difere do original; sem mudança, devolve os bytes de entrada intactos. `WriteSettings` resolve symlink antes do `rename` atômico, preserva o modo do arquivo e grava `settings.json.bak` (0600) ao lado do caminho original
+- Por quê: comparar bytes faria um settings já configurado, mas com outra formatação, ser reescrito e ganhar backup a cada `mem setup`; `UseNumber` evita reescrever inteiros grandes como float; `rename` direto sobre um symlink trocaria o link de dotfiles por um arquivo comum
+- Alternativa rejeitada: comparar bytes de saída, e editar o JSON preservando a ordem das chaves (exige parser próprio; a reordenação alfabética foi aceita)
+
 ## 23/11/2026, drain do spool separa erro permanente por validação local, não pelo erro do banco
 
 - Decisão: no `apply` do `spool.Drain`, linha que não decodifica como `Op` ou que falha em `validate` (sem projeto, `kind` desconhecido) vai para `capture_errors` e `mem.log` e é descartada; qualquer erro do store depois da validação interrompe o drain e a linha fica no spool. Se o próprio `RecordCaptureError` falhar, o drain também para, para não descartar sem rastro

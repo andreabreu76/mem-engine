@@ -50,3 +50,13 @@ func (s *Store) MergeProject(ctx context.Context, from, to string) (moved int64,
 	}
 	return moved, nil
 }
+
+func (s *Store) CountProjectActivity(ctx context.Context, key string) (observations, sessions int64, err error) {
+	err = s.db.QueryRowContext(ctx,
+		"SELECT (SELECT count(*) FROM observations WHERE project = ?1), (SELECT count(*) FROM sessions WHERE project = ?1)", key).
+		Scan(&observations, &sessions)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count activity of %s: %w", key, err)
+	}
+	return observations, sessions, nil
+}

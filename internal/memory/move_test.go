@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/andreabreu76/mem-engine/internal/project"
 	"github.com/andreabreu76/mem-engine/internal/store"
+	"github.com/andreabreu76/mem-engine/internal/wiki"
 )
 
 var billingOld = project.Project{
@@ -164,4 +166,84 @@ func inc(t *testing.T, n string) string {
 		t.Fatal(err)
 	}
 	return strconv.Itoa(v + 1)
+}
+
+func TestMoveProjectRemovesSourceCopyAfterCrashAndReindex(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	from := project.Project{Key: "/home/dev/src/billing-api-old", Name: "billing-api-old", Dir: "zz-billing-api-old"}
+	to := project.Project{Key: "/home/dev/src/billing-api", Name: "billing-api", Dir: "aa-billing-api"}
+	crashed, err := f.svc.Save(ctx, from, defaultInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := defaultInput()
+	in.Title = "Deploy window"
+	unindexed, err := f.svc.Save(ctx, from, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srcDir := filepath.Join(f.svc.WikiRoot, from.Dir)
+	name := filepath.Base(crashed.Path)
+	doc := parseFile(t, filepath.Join(srcDir, name))
+	doc.Project = to.Key
+	dst, err := wiki.OpenRepo(f.svc.WikiRoot, to.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.Write(name, wiki.Marshal(doc)); err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.Commit("mem: move "+crashed.ID, name); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.svc.Reindex(ctx)
+	if err != nil || len(rep.Skipped) != 1 {
+		t.Fatalf("Reindex after crash = %+v, %v; want the source copy skipped as duplicate", rep, err)
+	}
+	if err := f.svc.Store.DeleteMemory(ctx, unindexed.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, err := f.svc.MoveProject(ctx, from, to)
+	if err != nil || moved != 2 {
+		t.Fatalf("MoveProject = %d, %v; want 2, nil", moved, err)
+	}
+	names, err := (&wiki.Repo{Dir: srcDir}).List()
+	if err != nil || len(names) != 0 {
+		t.Errorf("source files left = %v, %v", names, err)
+	}
+	if st := gitOut(t, srcDir, "status", "--porcelain", "--", "*.md"); st != "" {
+		t.Errorf("source not clean: %q", st)
+	}
+	for _, id := range []string{crashed.ID, unindexed.ID} {
+		got, err := f.svc.Store.GetMemory(ctx, id)
+		if err != nil || got.Project != to.Key || filepath.Dir(got.Path) != to.Dir {
+			t.Errorf("index row %s = %+v, %v", id, got, err)
+		}
+	}
+	rep, err = f.svc.Reindex(ctx)
+	if err != nil || len(rep.Skipped) != 0 || rep.Indexed != 2 {
+		t.Errorf("Reindex after rerun = %+v, %v", rep, err)
+	}
+}
+
+func TestMoveProjectFailsWhenSourceKeepsFiles(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if _, err := f.svc.Save(ctx, billingOld, defaultInput()); err != nil {
+		t.Fatal(err)
+	}
+	junk := filepath.Join(f.svc.WikiRoot, billingOld.Dir, "notes.md")
+	if err := os.WriteFile(junk, []byte("no frontmatter\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := f.svc.MoveProject(ctx, billingOld, billing)
+	if err == nil || !strings.Contains(err.Error(), "notes.md") {
+		t.Errorf("MoveProject = %d, %v; want an error naming notes.md", moved, err)
+	}
+	if _, statErr := os.Stat(junk); statErr != nil {
+		t.Errorf("unparseable file touched: %v", statErr)
+	}
 }

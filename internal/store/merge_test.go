@@ -103,3 +103,16 @@ func TestMergeProjectRejectsInvalidPairs(t *testing.T) {
 		}
 	}
 }
+
+func TestCountProjectActivity(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	start := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	seedSession(t, s, mergeFrom, "s1", start, Observation{Kind: "prompt", Title: "a", Body: "a"}, Observation{Kind: "stop", Title: "b", Body: "b"})
+	seedSession(t, s, mergeFrom, "s2", start.Add(time.Hour))
+	seedSession(t, s, mergeTo, "s3", start, Observation{Kind: "prompt", Title: "c", Body: "c"})
+	obs, sessions, err := s.CountProjectActivity(ctx, mergeFrom)
+	if err != nil || obs != 2 || sessions != 2 {
+		t.Errorf("CountProjectActivity = %d, %d, %v; want 2, 2", obs, sessions, err)
+	}
+}

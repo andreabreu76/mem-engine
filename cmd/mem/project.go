@@ -17,6 +17,7 @@ import (
 	"github.com/andreabreu76/mem-engine/internal/config"
 	"github.com/andreabreu76/mem-engine/internal/memory"
 	"github.com/andreabreu76/mem-engine/internal/project"
+	"github.com/andreabreu76/mem-engine/internal/setup"
 	"github.com/andreabreu76/mem-engine/internal/store"
 )
 
@@ -76,6 +77,10 @@ func runProjectMerge(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		return 1
 	}
 	to, err := findProject(ctx, st, names[1])
+	if errors.Is(err, store.ErrNotFound) {
+		fmt.Fprintf(stderr, "mem project merge: %v: open a Claude Code session in that project first so mem-engine records it, or pass the key of a project it already knows\n", err)
+		return 1
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "mem project merge: %v\n", err)
 		return 1
@@ -97,8 +102,13 @@ func mergeProjects(ctx context.Context, st *store.Store, cfg config.Config, from
 		fmt.Fprintf(stderr, "mem project merge: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "merge %s into %s: %d memories, the observations and the sessions of %s move to %s, and %s is removed\n",
-		from.Key, to.Key, len(ms), from.Key, to.Key, from.Key)
+	observations, sessions, err := st.CountProjectActivity(ctx, from.Key)
+	if err != nil {
+		fmt.Fprintf(stderr, "mem project merge: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "merge %s into %s: %d memories, %d observations and %d sessions move to %s, and %s is removed\n",
+		from.Key, to.Key, len(ms), observations, sessions, to.Key, from.Key)
 	if !yes && !confirm(stdin, stdout) {
 		fmt.Fprintln(stderr, "mem project merge: aborted, nothing changed")
 		return 1
@@ -110,7 +120,7 @@ func mergeProjects(ctx context.Context, st *store.Store, cfg config.Config, from
 		fmt.Fprintf(stderr, "mem project merge: %v\nrun the same command again to continue\n", err)
 		return 1
 	}
-	observations, err := st.MergeProject(ctx, from.Key, to.Key)
+	observations, err = st.MergeProject(ctx, from.Key, to.Key)
 	if err != nil {
 		fmt.Fprintf(stdout, "moved 0 observations, %d memories\n", memories)
 		fmt.Fprintf(stderr, "mem project merge: %v\nrun the same command again to continue\n", err)
@@ -123,7 +133,7 @@ func mergeProjects(ctx context.Context, st *store.Store, cfg config.Config, from
 func findProject(ctx context.Context, st *store.Store, nameOrKey string) (project.Project, error) {
 	row, err := st.FindProject(ctx, nameOrKey)
 	if errors.Is(err, store.ErrNotFound) {
-		return project.Project{}, fmt.Errorf("unknown project %q", nameOrKey)
+		return project.Project{}, fmt.Errorf("unknown project %q: %w", nameOrKey, store.ErrNotFound)
 	}
 	if err != nil {
 		return project.Project{}, err
@@ -177,23 +187,20 @@ func appendAlias(home string, alias config.Alias) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	prefix := ""
-	if len(existing) > 0 {
-		prefix = "\n"
-		if !bytes.HasSuffix(existing, []byte("\n")) {
-			prefix = "\n\n"
+	content := existing
+	if len(content) > 0 {
+		if !bytes.HasSuffix(content, []byte("\n")) {
+			content = append(content, '\n')
 		}
+		content = append(content, '\n')
 	}
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		return err
+	content = append(content, block.Bytes()...)
+	var check config.Config
+	if _, err := toml.Decode(string(content), &check); err != nil || len(check.Aliases) != len(cfg.Aliases)+1 {
+		if err == nil {
+			err = errors.New("the new block is not read back as an alias")
+		}
+		return fmt.Errorf("%s cannot take a new [[alias]] block (%v), nothing written: add the alias by hand", path, err)
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.WriteString(prefix + block.String()); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
+	return setup.WriteSettings(path, content)
 }

@@ -160,7 +160,7 @@ mem project merge <from> <to> [--yes]
 mem project alias <old-key> <new-path>
 ```
 
-`mem project merge` moves everything recorded under `<from>` into `<to>`: each memory file is rewritten in the wiki directory of `<to>` with the new `project` (same id, tags and dates, a suffixed file name when the name is taken) and committed in both wiki repositories, and the observations and sessions move in one database transaction. `<from>` and `<to>` are project names or keys; a name shared by several projects is refused with the list of keys. The command shows what will move and asks before applying (`--yes` skips the prompt), then prints `moved N observations, M memories`. `<from>` is removed from the project list only after all its memories moved. If a step fails, the memories moved until then stay valid and running the same command again continues where it stopped. The `user` scope cannot be merged, nor a project into itself.
+`mem project merge` moves everything recorded under `<from>` into `<to>`: each memory file is rewritten in the wiki directory of `<to>` with the new `project` (same id, tags and dates, a suffixed file name when the name is taken) and committed in both wiki repositories, and the observations and sessions move in one database transaction. `<from>` and `<to>` are project names or keys; a name shared by several projects is refused with the list of keys. Memory files in the wiki directory of `<from>` that are missing from the index move too. `<to>` must be a project mem-engine already knows: open a Claude Code session in it first, or pass its key. The command shows how many memories, observations and sessions will move and asks before applying (`--yes` skips the prompt), then prints `moved N observations, M memories`. `<from>` is removed from the project list only after its wiki directory holds no memory file; a file there that is not a memory stops the merge with its name, to be moved or deleted by hand. If a step fails, the memories moved until then stay valid and running the same command again continues where it stopped. The `user` scope cannot be merged, nor a project into itself.
 
 `mem project alias` keeps recording a repository under an existing key after it moved, for example from `/home/dev/src/billing-api` to `/home/dev/src/acme/billing-api`:
 
@@ -168,7 +168,7 @@ mem project alias <old-key> <new-path>
 mem project alias /home/dev/src/billing-api /home/dev/src/acme/billing-api
 ```
 
-It appends an `[[alias]]` block to `config.toml` (created with mode 0600 when missing, existing content kept). Both arguments must be absolute paths (`~/` is expanded), and a second alias for the same path is refused. Exit code 0 on success, 1 on error, 2 on bad arguments, for both commands.
+It appends an `[[alias]]` block to `config.toml` (created with mode 0600 when missing, existing content and mode kept, previous file saved as `config.toml.bak`). The result is checked before it is written, atomically: when the file cannot take the block (for example, aliases declared as an inline array), nothing is written and the alias has to be added by hand. Both arguments must be absolute paths (`~/` is expanded), and a second alias for the same path is refused. Exit code 0 on success, 1 on error, 2 on bad arguments, for both commands.
 
 ## Viewer
 

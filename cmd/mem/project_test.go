@@ -62,6 +62,29 @@ func TestAliasAppendsAndResolves(t *testing.T) {
 	}
 }
 
+func TestAliasRefusesConfigItCannotExtend(t *testing.T) {
+	home := setHome(t)
+	cfgPath := filepath.Join(home, "config.toml")
+	old := "alias = [{path = \"/home/dev/src/acme/a\", key = \"/home/dev/src/acme/b\"}]\n"
+	if err := os.WriteFile(cfgPath, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadFrom(home); err != nil {
+		t.Fatalf("fixture not accepted by LoadFrom: %v", err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"project", "alias", filepath.Join(t.TempDir(), "old"), t.TempDir()}, nil, &out, &errb)
+	if code != 1 || !strings.Contains(errb.String(), "add the alias by hand") {
+		t.Errorf("code = %d, stderr = %q", code, errb.String())
+	}
+	if data, _ := os.ReadFile(cfgPath); string(data) != old {
+		t.Errorf("config changed:\n%s", data)
+	}
+	if _, err := config.LoadFrom(home); err != nil {
+		t.Errorf("config unreadable after refused alias: %v", err)
+	}
+}
+
 func TestAliasCreatesConfigPrivate(t *testing.T) {
 	home := setHome(t)
 	var out, errb bytes.Buffer
@@ -117,6 +140,13 @@ func TestProjectMergeCommand(t *testing.T) {
 	}
 	if countMemories(t, home, from.Key) != 1 {
 		t.Fatal("declined merge moved memories")
+	}
+	if !strings.Contains(out.String(), "1 memories, 1 observations and 1 sessions") {
+		t.Errorf("prompt = %q, want the counts", out.String())
+	}
+	errb.Reset()
+	if code := run([]string{"project", "merge", from.Key, "billing-api-new", "--yes"}, nil, &out, &errb); code != 1 || !strings.Contains(errb.String(), "open a Claude Code session") {
+		t.Errorf("unknown destination code = %d, stderr = %q", code, errb.String())
 	}
 
 	out.Reset()

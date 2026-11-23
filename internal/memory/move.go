@@ -42,31 +42,80 @@ func (s *Service) MoveProject(ctx context.Context, from, to project.Project) (mo
 	if err != nil {
 		return 0, err
 	}
+	inSrc, err := idsIn(src)
+	if err != nil {
+		return 0, err
+	}
 	present, err := idsIn(dst)
 	if err != nil {
 		return 0, err
 	}
+	var ids []string
+	names := map[string]string{}
 	for _, m := range ms {
-		if err := s.moveOne(ctx, m, from, to, src, dst, present); err != nil {
-			return moved, fmt.Errorf("move %s into %s: moved %d of %d: %w", from.Key, to.Key, moved, len(ms), err)
+		dir, name, ok := strings.Cut(m.Path, "/")
+		if !ok || dir != from.Dir || !validName(name) {
+			return 0, fmt.Errorf("move %s into %s: memory %s: path %q is not in %s (run mem reindex)", from.Key, to.Key, m.ID, m.Path, from.Dir)
+		}
+		ids = append(ids, m.ID)
+		names[m.ID] = name
+	}
+	for id, name := range inSrc {
+		if _, listed := names[id]; listed {
+			names[id] = name
+			continue
+		}
+		if err := s.checkUnlisted(ctx, id, to); err != nil {
+			return 0, fmt.Errorf("move %s into %s: %s/%s: %w", from.Key, to.Key, from.Dir, name, err)
+		}
+		ids = append(ids, id)
+		names[id] = name
+	}
+	sort.Strings(ids[len(ms):])
+	for _, id := range ids {
+		if err := s.moveOne(ctx, id, names[id], from, to, src, dst, present); err != nil {
+			return moved, fmt.Errorf("move %s into %s: moved %d of %d: %w", from.Key, to.Key, moved, len(ids), err)
 		}
 		moved++
+	}
+	left, err := src.List()
+	if err != nil {
+		return moved, err
+	}
+	if len(left) > 0 {
+		return moved, fmt.Errorf("move %s into %s: %s still holds files that are not memories: %s (move or delete them, then run again)",
+			from.Key, to.Key, from.Dir, strings.Join(left, ", "))
 	}
 	return moved, nil
 }
 
-func (s *Service) moveOne(ctx context.Context, m store.Memory, from, to project.Project, src, dst *wiki.Repo, present map[string]string) error {
-	dir, name, ok := strings.Cut(m.Path, "/")
-	if !ok || dir != from.Dir || !validName(name) {
-		return fmt.Errorf("memory %s: path %q is not in %s (run mem reindex)", m.ID, m.Path, from.Dir)
-	}
-	dstName, inDst := present[m.ID]
-	doc, err := readOwnDoc(src, name, m.ID)
-	if errors.Is(err, fs.ErrNotExist) && inDst {
-		doc, err = readOwnDoc(dst, dstName, m.ID)
+func (s *Service) checkUnlisted(ctx context.Context, id string, to project.Project) error {
+	m, err := s.Store.GetMemory(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("memory %s: %s: %w (run mem reindex)", m.ID, m.Path, err)
+		return err
+	}
+	if m.Project != to.Key {
+		return fmt.Errorf("memory %s is indexed under project %s (run mem reindex)", id, m.Project)
+	}
+	return nil
+}
+
+func (s *Service) moveOne(ctx context.Context, id, name string, from, to project.Project, src, dst *wiki.Repo, present map[string]string) error {
+	var (
+		doc wiki.Doc
+		err error
+	)
+	dstName, inDst := present[id]
+	if inDst {
+		doc, err = readOwnDoc(dst, dstName, id)
+	} else {
+		doc, err = readOwnDoc(src, name, id)
+	}
+	if err != nil {
+		return fmt.Errorf("memory %s: %w (run mem reindex)", id, err)
 	}
 	doc.Project = to.Key
 	if !inDst {
@@ -75,7 +124,7 @@ func (s *Service) moveOne(ctx context.Context, m store.Memory, from, to project.
 	if err := dst.Write(dstName, wiki.Marshal(doc)); err != nil {
 		return err
 	}
-	if err := dst.Commit("mem: move "+m.ID+" "+doc.Title+" from "+from.Key, dstName); err != nil {
+	if err := dst.Commit("mem: move "+id+" "+doc.Title+" from "+from.Key, dstName); err != nil {
 		if !inDst {
 			if rmErr := dst.Remove(dstName); rmErr != nil {
 				return errors.Join(err, rmErr)
@@ -83,11 +132,11 @@ func (s *Service) moveOne(ctx context.Context, m store.Memory, from, to project.
 		}
 		return err
 	}
-	present[m.ID] = dstName
+	present[id] = dstName
 	if err := src.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if err := src.Commit("mem: move "+m.ID+" "+doc.Title+" to "+to.Key, name); err != nil {
+	if err := src.Commit("mem: move "+id+" "+doc.Title+" to "+to.Key, name); err != nil {
 		return err
 	}
 	return s.Store.UpsertMemory(ctx, toMemory(doc, to.Dir+"/"+dstName))

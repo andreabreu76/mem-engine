@@ -14,6 +14,7 @@ commands:
   doctor    check the binary, data dir, database, spool, capture errors and hooks
   gc        delete observations older than retention_days
   hook      record a Claude Code hook event read from stdin
+  reindex   rebuild the memory index from the wiki
   setup     register the mem hooks in ~/.claude/settings.json (--plan, --yes)
   version   print the mem version
 `
@@ -34,6 +35,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runGC(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdin, stdout, stderr)
+	case "reindex":
+		return runReindex(args[1:], stdout, stderr)
 	case "setup":
 		return runSetup(args[1:], stdin, stdout, stderr)
 	case "version":

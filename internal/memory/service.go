@@ -45,6 +45,11 @@ type Service struct {
 var ErrInvalid = errors.New("invalid memory")
 
 var (
+	errTitleRequired   = fmt.Errorf("%w: title is required", ErrInvalid)
+	errSummaryRequired = fmt.Errorf("%w: summary is required", ErrInvalid)
+)
+
+var (
 	typePattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	idPattern     = regexp.MustCompile(`^m-[0-9a-f]{12}$`)
 	dirHashSuffix = regexp.MustCompile(`-[0-9a-f]{6}$`)
@@ -106,6 +111,9 @@ func (s *Service) Save(ctx context.Context, p project.Project, in Input) (store.
 }
 
 func (s *Service) Update(ctx context.Context, id string, patch Patch) (store.Memory, error) {
+	if err := validatePatch(patch); err != nil {
+		return store.Memory{}, err
+	}
 	current, err := s.Store.GetMemory(ctx, id)
 	if err != nil {
 		return store.Memory{}, fmt.Errorf("update: %w", err)
@@ -126,7 +134,7 @@ func (s *Service) Update(ctx context.Context, id string, patch Patch) (store.Mem
 	}
 	apply(&doc, patch)
 	if err := validate(doc.Type, doc.Title, doc.Summary); err != nil {
-		return store.Memory{}, err
+		return store.Memory{}, fmt.Errorf("update %s: %s: %v (run mem reindex)", id, current.Path, err)
 	}
 	doc.Updated = s.now()
 	if err := repo.Write(name, wiki.Marshal(doc)); err != nil {
@@ -253,7 +261,7 @@ func readDoc(file string) (wiki.Doc, error) {
 		return wiki.Doc{}, fmt.Errorf("wiki: invalid id %q, want m- followed by 12 hex digits", doc.ID)
 	}
 	if err := validateType(doc.Type); err != nil {
-		return wiki.Doc{}, err
+		return wiki.Doc{}, fmt.Errorf("wiki: %v", err)
 	}
 	return doc, nil
 }
@@ -315,15 +323,30 @@ func validateType(typ string) error {
 	return nil
 }
 
+func validatePatch(p Patch) error {
+	if p.Type != nil {
+		if err := validateType(*p.Type); err != nil {
+			return err
+		}
+	}
+	if p.Title != nil && strings.TrimSpace(*p.Title) == "" {
+		return errTitleRequired
+	}
+	if p.Summary != nil && strings.TrimSpace(*p.Summary) == "" {
+		return errSummaryRequired
+	}
+	return nil
+}
+
 func validate(typ, title, summary string) error {
 	if err := validateType(typ); err != nil {
 		return err
 	}
 	if strings.TrimSpace(title) == "" {
-		return fmt.Errorf("%w: title is required", ErrInvalid)
+		return errTitleRequired
 	}
 	if strings.TrimSpace(summary) == "" {
-		return fmt.Errorf("%w: summary is required", ErrInvalid)
+		return errSummaryRequired
 	}
 	return nil
 }

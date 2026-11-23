@@ -457,6 +457,27 @@ func TestInternalErrorIsGeneric(t *testing.T) {
 	}
 }
 
+func TestUpdateOverCorruptFileIsInternalError(t *testing.T) {
+	f := newFixture(t)
+	id := f.save(t, billing, "corrupt me")
+	m, err := f.srv.Store.GetMemory(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(f.srv.Cfg.WikiDir(), m.Path)
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(strings.Replace(string(b), "type: decision", "type: Not Valid", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(t, http.MethodPut, "/api/memory/"+id+"?project="+billing.Name, `{"title":"new title"}`, http.StatusInternalServerError)
+	if got := decode[errorJSON](t, w); got.Error != "internal error" {
+		t.Fatalf("500 body = %+v", got)
+	}
+}
+
 func TestStarIsTheSameSnapshotEverywhere(t *testing.T) {
 	f := newFixture(t)
 	known := f.observe(t, "s1", billing.Key, "known", "one", testNow.Add(-2*time.Hour))

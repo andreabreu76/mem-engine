@@ -386,6 +386,31 @@ func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
 
+func TestUpdateOverCorruptFileIsShort(t *testing.T) {
+	f := newFixture(t)
+	id := f.save(t, billing, "Retry policy", "summary", "body")
+	m, err := f.st.GetMemory(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(f.home, "wiki", m.Path)
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(strings.Replace(string(b), "type: decision", "type: Not Valid", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cs := f.connect(t, billing)
+	out, isErr := call(t, cs, "update", map[string]any{"id": id, "title": "New title"})
+	if !isErr || out != "update failed, see mem.log" {
+		t.Fatalf("update over corrupt file: isError = %v, text = %q", isErr, out)
+	}
+	if !strings.Contains(f.log.String(), m.Path) {
+		t.Fatalf("mem.log lacks the full error: %q", f.log.String())
+	}
+}
+
 func TestInternalErrorIsShort(t *testing.T) {
 	f := newFixture(t)
 	if err := os.MkdirAll(f.svc.WikiRoot, 0o700); err != nil {

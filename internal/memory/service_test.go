@@ -212,6 +212,70 @@ func TestUpdateValidationWrapsErrInvalid(t *testing.T) {
 	}
 }
 
+func corruptType(t *testing.T, wikiRoot, rel string) {
+	t.Helper()
+	file := filepath.Join(wikiRoot, rel)
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(string(b), "type: decision", "type: Not Valid", 1)
+	if bad == string(b) {
+		t.Fatalf("no type line in %s", b)
+	}
+	if err := os.WriteFile(file, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCorruptTypeOnDiskIsNotErrInvalid(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	m, err := f.svc.Save(ctx, billing, defaultInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	corruptType(t, f.svc.WikiRoot, m.Path)
+
+	title := "New title"
+	_, err = f.svc.Update(ctx, m.ID, Patch{Title: &title})
+	if err == nil || errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), "(run mem reindex)") {
+		t.Fatalf("Update over corrupt file = %v, want a non-ErrInvalid reindex error", err)
+	}
+	blank := " "
+	if _, err := f.svc.Update(ctx, m.ID, Patch{Title: &blank}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("blank title over corrupt file = %v, want ErrInvalid for the input", err)
+	}
+	fixed := "fact"
+	if got, err := f.svc.Update(ctx, m.ID, Patch{Type: &fixed}); err != nil || got.Type != "fact" {
+		t.Fatalf("Update repairing the type = %+v, %v", got, err)
+	}
+
+	corruptOther, err := f.svc.Save(ctx, billing, defaultInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	corruptType(t, f.svc.WikiRoot, corruptOther.Path)
+	if err := f.svc.Forget(ctx, corruptOther.ID); err != nil {
+		t.Fatalf("Forget over corrupt file = %v, want it removed", err)
+	}
+	if _, err := f.svc.Reindex(ctx); err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+}
+
+func TestReindexInvalidTypeIsNotErrInvalid(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "bad.md")
+	bad := wiki.Marshal(wiki.Doc{ID: "m-0000000000bb", Type: "Not Valid", Title: "Bad type", Summary: "s", Project: billing.Key})
+	if err := os.WriteFile(file, bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readDoc(file); err == nil || errors.Is(err, ErrInvalid) {
+		t.Fatalf("readDoc = %v, want a non-ErrInvalid error", err)
+	}
+}
+
 func TestUpdateChangesFileAndIndex(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)

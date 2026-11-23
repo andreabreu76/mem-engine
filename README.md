@@ -6,13 +6,28 @@ A single-binary, local long-term memory for Claude Code that captures session ob
 
 ## Install
 
+The hooks call `mem` by name, so whichever way you install it, the binary must be on your `PATH`. To use it as a Claude Code plugin, install the binary first and then see [Install as a Claude Code plugin](#install-as-a-claude-code-plugin).
+
+### From a release
+
+Each [release](https://github.com/andreabreu76/mem-engine/releases) has an archive per platform, `tar.gz` for macOS and Linux and `zip` for Windows, on `amd64` and `arm64`, plus `checksums.txt`. Download the archive for your platform and `checksums.txt`, verify the archive and put `mem` on your `PATH`:
+
+```sh
+sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf mem-engine_<version>_linux_amd64.tar.gz
+install -m 0755 mem ~/.local/bin/mem
+mem version
+```
+
+### With Go
+
 Requires Go 1.26 or newer. The binary is pure Go (no cgo).
 
 ```sh
 go install github.com/andreabreu76/mem-engine/cmd/mem@latest
 ```
 
-Make sure `$(go env GOPATH)/bin` is on your `PATH`, since the hooks call `mem` by name.
+Make sure `$(go env GOPATH)/bin` is on your `PATH`.
 
 ## Setup
 

@@ -1,5 +1,11 @@
 # DECISIONS
 
+## 23/11/2026, releases com goreleaser fixado em versão e actions fixadas por SHA
+
+- Decisão: `.goreleaser.yaml` (version 2) gera `mem` para darwin, linux e windows em amd64 e arm64 com `CGO_ENABLED=0`, `-trimpath` e `-s -w -X main.version={{.Version}}`, arquivos `tar.gz` (`zip` no Windows) com `LICENSE` e `README.md`, e `checksums.txt` em sha256. O `release.yml` roda em tag `v*`, com `contents: write` só no job, testes antes do goreleaser, `GITHUB_TOKEN` apenas, `persist-credentials: false` e sem cache do setup-go. O goreleaser fica em `v2.20.0` no workflow e localmente roda por `go run github.com/goreleaser/goreleaser/v2@v2.20.0`; `actions/checkout`, `actions/setup-go` e `goreleaser/goreleaser-action` são referenciados por SHA de commit com a tag em comentário, em `ci.yml` também. Só entram versões publicadas há pelo menos 14 dias. `release.github` declara `andreabreu76/mem-engine` explicitamente
+- Por quê: tag móvel de action ou `~> v2` do goreleaser deixa uma release nova de terceiro entrar no pipeline que publica os binários sem revisão; a janela de 14 dias dá tempo de uma versão comprometida ser retirada. Sem `release.github`, `goreleaser check` falha em clone sem remote (`scm releases: no remote configured to list refs from`)
+- Alternativa rejeitada: instalar goreleaser globalmente, actions por tag de versão e seções de homebrew, scoop, docker e assinatura (fora do escopo da v1)
+
 ## 23/11/2026, handoff ignora sessão vazia, preserva a linha `Lookup` e mostra arquivo relativo ao projeto
 
 - Decisão: `LastSession` só considera sessão com alguma observação além de `session_start` e `compact_start`. `Build` normaliza todo texto livre para uma linha, corta por runes com `…` (prompt 120, resposta 160, resumo de compactação 480, título de memória 64, arquivo 40 cortado pela esquerda) e, se ainda passar de `MaxChars`, corta o corpo em bytes na fronteira de rune antes da linha `Lookup`, que sempre fica inteira. Arquivo aparece relativo à chave do projeto e, fora dela, só pelo nome. Erro em `Collect` vai para o `mem.log` e o hook devolve só a primeira e a última linha

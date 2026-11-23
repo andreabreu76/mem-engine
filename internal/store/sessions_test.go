@@ -80,6 +80,31 @@ func TestLastSessionNone(t *testing.T) {
 	}
 }
 
+func TestLastSessionSpanningProjects(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	seedSession(t, s, "/p/a", "s1", sessionBase,
+		Observation{Kind: "session_start", Title: "session start (startup)"})
+	if _, err := s.InsertObservation(ctx, Observation{SessionID: "s1", Project: "/p/b", Kind: "prompt", Title: "b", Body: "b prompt", CreatedAt: sessionBase.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertObservation(ctx, Observation{SessionID: "s1", Project: "/p/b", Kind: "tool", Title: "Edit", ToolName: "Edit", Files: []string{"/p/b/x.go"}, CreatedAt: sessionBase.Add(2 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, ok, err := s.LastSession(ctx, "/p/a", "current"); err != nil || ok {
+		t.Errorf("LastSession(/p/a) = %+v, %v, %v, want not found", got, ok, err)
+	}
+	got, ok, err := s.LastSession(ctx, "/p/b", "current")
+	if err != nil || !ok {
+		t.Fatalf("LastSession(/p/b) = %v, %v", ok, err)
+	}
+	want := SessionSummary{SessionID: "s1", StartedAt: sessionBase, LastPrompt: "b prompt", Files: []string{"/p/b/x.go"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("LastSession(/p/b) = %+v, want %+v", got, want)
+	}
+}
+
 func TestLatestCompactSummary(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)
@@ -89,11 +114,11 @@ func TestLatestCompactSummary(t *testing.T) {
 	seedSession(t, s, "/p/a", "s2", sessionBase,
 		Observation{Kind: "prompt", Title: "p", Body: "p"})
 
-	got, ok, err := s.LatestCompactSummary(ctx, "s1")
+	got, ok, err := s.LatestCompactSummary(ctx, "/p/a", "s1")
 	if err != nil || !ok || got != "newer summary" {
 		t.Errorf("LatestCompactSummary(s1) = %q, %v, %v", got, ok, err)
 	}
-	if got, ok, err := s.LatestCompactSummary(ctx, "s2"); err != nil || ok || got != "" {
+	if got, ok, err := s.LatestCompactSummary(ctx, "/p/a", "s2"); err != nil || ok || got != "" {
 		t.Errorf("LatestCompactSummary(s2) = %q, %v, %v", got, ok, err)
 	}
 }

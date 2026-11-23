@@ -221,3 +221,57 @@ func TestCollectCompactUsesCurrentSession(t *testing.T) {
 		t.Errorf("fallback Input = %+v", in)
 	}
 }
+
+func TestCollectFiltersSessionContentByProject(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	other := store.ProjectRow{Key: "/home/dev/src/acme-web", Name: "acme-web", Dir: "acme-web-def456"}
+	seed(t, st, testProject.Key, "s1", testStart, "session_start", "")
+	seed(t, st, testProject.Key, "s1", testStart.Add(time.Minute), "prompt", "fix retry in billing")
+	seed(t, st, other.Key, "s1", testStart.Add(2*time.Minute), "prompt", "deploy acme secret plan")
+	if _, err := st.InsertObservation(ctx, store.Observation{SessionID: "s1", Project: other.Key, Kind: "tool", Title: "Edit", ToolName: "Edit", Files: []string{other.Key + "/checkout.go"}, CreatedAt: testStart.Add(3 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	seed(t, st, other.Key, "s1", testStart.Add(4*time.Minute), "stop", "acme answer")
+	seed(t, st, other.Key, "s1", testStart.Add(5*time.Minute), "compact", "acme compact summary")
+	seed(t, st, testProject.Key, "s2", testStart.Add(time.Hour), "prompt", "current prompt")
+	seed(t, st, other.Key, "s3", testStart.Add(2*time.Hour), "prompt", "acme current")
+
+	in, err := Collect(ctx, st, testProject, "s2", "startup")
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if in.Last == nil || in.Last.SessionID != "s1" || in.Last.LastPrompt != "fix retry in billing" || in.Last.LastAssistant != "" || len(in.Last.Files) != 0 {
+		t.Fatalf("Last of billing-api = %+v", in.Last)
+	}
+	text := Build(in)
+	if strings.Contains(text, "acme") || strings.Contains(text, "checkout.go") {
+		t.Errorf("billing-api handoff leaks acme-web: %q", text)
+	}
+
+	in, err = Collect(ctx, st, other, "s3", "startup")
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if in.Last == nil || in.Last.SessionID != "s1" || in.Last.LastPrompt != "deploy acme secret plan" || in.Last.LastAssistant != "acme answer" || len(in.Last.Files) != 1 {
+		t.Fatalf("Last of acme-web = %+v", in.Last)
+	}
+	if text := Build(in); strings.Contains(text, "billing") || !strings.Contains(text, "checkout.go") {
+		t.Errorf("acme-web handoff = %q", text)
+	}
+
+	in, err = Collect(ctx, st, testProject, "s1", "compact")
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if in.Compact != "" {
+		t.Errorf("billing-api compact = %q", in.Compact)
+	}
+	in, err = Collect(ctx, st, other, "s1", "compact")
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if in.Compact != "acme compact summary" {
+		t.Errorf("acme-web compact = %q", in.Compact)
+	}
+}

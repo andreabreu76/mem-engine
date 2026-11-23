@@ -37,7 +37,7 @@ type Input struct {
 func Collect(ctx context.Context, st *store.Store, p store.ProjectRow, sessionID, source string) (Input, error) {
 	in := Input{Project: p, Source: source}
 	if source == sourceCompact {
-		summary, ok, err := st.LatestCompactSummary(ctx, sessionID)
+		summary, ok, err := st.LatestCompactSummary(ctx, p.Key, sessionID)
 		if err != nil {
 			return in, err
 		}

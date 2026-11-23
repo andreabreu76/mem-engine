@@ -24,11 +24,11 @@ func (s *Store) LastSession(ctx context.Context, project, excludeSession string)
 		started int64
 	)
 	err := s.db.QueryRowContext(ctx, `
-SELECT id, started_at FROM sessions
-WHERE project = ?1 AND id <> ?2 AND EXISTS (
-  SELECT 1 FROM observations o
-  WHERE o.session_id = sessions.id AND o.kind NOT IN ('session_start', 'compact_start'))
-ORDER BY started_at DESC, id DESC LIMIT 1`, project, excludeSession).Scan(&sum.SessionID, &started)
+SELECT o.session_id, coalesce(min(s.started_at), min(o.created_at)) AS started
+FROM observations o LEFT JOIN sessions s ON s.id = o.session_id
+WHERE o.project = ?1 AND o.session_id <> ?2 AND o.kind NOT IN ('session_start', 'compact_start')
+GROUP BY o.session_id
+ORDER BY started DESC, o.session_id DESC LIMIT 1`, project, excludeSession).Scan(&sum.SessionID, &started)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionSummary{}, false, nil
 	}
@@ -36,27 +36,27 @@ ORDER BY started_at DESC, id DESC LIMIT 1`, project, excludeSession).Scan(&sum.S
 		return SessionSummary{}, false, fmt.Errorf("last session of %s: %w", project, err)
 	}
 	sum.StartedAt = time.Unix(started, 0).UTC()
-	if sum.LastPrompt, _, err = s.latestBody(ctx, sum.SessionID, "prompt"); err != nil {
+	if sum.LastPrompt, _, err = s.latestBody(ctx, project, sum.SessionID, "prompt"); err != nil {
 		return SessionSummary{}, false, err
 	}
-	if sum.LastAssistant, _, err = s.latestBody(ctx, sum.SessionID, "stop"); err != nil {
+	if sum.LastAssistant, _, err = s.latestBody(ctx, project, sum.SessionID, "stop"); err != nil {
 		return SessionSummary{}, false, err
 	}
-	if sum.Files, err = s.recentFiles(ctx, sum.SessionID); err != nil {
+	if sum.Files, err = s.recentFiles(ctx, project, sum.SessionID); err != nil {
 		return SessionSummary{}, false, err
 	}
 	return sum, true, nil
 }
 
-func (s *Store) LatestCompactSummary(ctx context.Context, sessionID string) (string, bool, error) {
-	return s.latestBody(ctx, sessionID, "compact")
+func (s *Store) LatestCompactSummary(ctx context.Context, project, sessionID string) (string, bool, error) {
+	return s.latestBody(ctx, project, sessionID, "compact")
 }
 
-func (s *Store) latestBody(ctx context.Context, sessionID, kind string) (string, bool, error) {
+func (s *Store) latestBody(ctx context.Context, project, sessionID, kind string) (string, bool, error) {
 	var body string
 	err := s.db.QueryRowContext(ctx, `
-SELECT body FROM observations WHERE session_id = ? AND kind = ?
-ORDER BY created_at DESC, id DESC LIMIT 1`, sessionID, kind).Scan(&body)
+SELECT body FROM observations WHERE project = ? AND session_id = ? AND kind = ?
+ORDER BY created_at DESC, id DESC LIMIT 1`, project, sessionID, kind).Scan(&body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -66,11 +66,11 @@ ORDER BY created_at DESC, id DESC LIMIT 1`, sessionID, kind).Scan(&body)
 	return body, true, nil
 }
 
-func (s *Store) recentFiles(ctx context.Context, sessionID string) ([]string, error) {
+func (s *Store) recentFiles(ctx context.Context, project, sessionID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT files FROM observations
-WHERE session_id = ? AND kind = 'tool' AND files IS NOT NULL AND files <> '[]'
-ORDER BY created_at DESC, id DESC`, sessionID)
+WHERE project = ? AND session_id = ? AND kind = 'tool' AND files IS NOT NULL AND files <> '[]'
+ORDER BY created_at DESC, id DESC`, project, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("files of session %s: %w", sessionID, err)
 	}

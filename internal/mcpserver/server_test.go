@@ -1,7 +1,10 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -26,8 +30,10 @@ var (
 )
 
 type fixture struct {
-	st  *store.Store
-	svc *memory.Service
+	st   *store.Store
+	svc  *memory.Service
+	home string
+	log  *bytes.Buffer
 }
 
 func newFixture(t *testing.T) fixture {
@@ -50,13 +56,14 @@ func newFixture(t *testing.T) fixture {
 	}
 	t.Cleanup(func() { st.Close() })
 	now := func() time.Time { return testNow }
-	return fixture{st: st, svc: &memory.Service{Store: st, WikiRoot: filepath.Join(home, "wiki"), Now: now}}
+	return fixture{st: st, svc: &memory.Service{Store: st, WikiRoot: filepath.Join(home, "wiki"), Now: now}, home: home, log: &bytes.Buffer{}}
 }
 
 func (f fixture) connect(t *testing.T, current project.Project) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
-	srv := New(Deps{Store: f.st, Memory: f.svc, Current: current, Now: func() time.Time { return testNow }})
+	log := slog.New(slog.NewTextHandler(f.log, nil))
+	srv := New(Deps{Store: f.st, Memory: f.svc, Current: current, Now: func() time.Time { return testNow }, Log: log})
 	serverT, clientT := mcp.NewInMemoryTransports()
 	ss, err := srv.Connect(ctx, serverT, nil)
 	if err != nil {
@@ -134,6 +141,15 @@ func TestListToolsOrderHints(t *testing.T) {
 		}
 		if tool.OutputSchema != nil {
 			t.Errorf("%s has an output schema", tool.Name)
+		}
+		if hint == "" {
+			continue
+		}
+		schema, _ := tool.InputSchema.(map[string]any)
+		props, _ := schema["properties"].(map[string]any)
+		param, _ := props["project"].(map[string]any)
+		if desc, _ := param["description"].(string); !strings.Contains(desc, "Omit it unless the user explicitly asks") {
+			t.Errorf("%s project description = %q", tool.Name, desc)
 		}
 	}
 }
@@ -368,4 +384,96 @@ func TestSearchLineBudget(t *testing.T) {
 
 func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
+}
+
+func TestInternalErrorIsShort(t *testing.T) {
+	f := newFixture(t)
+	if err := os.MkdirAll(f.svc.WikiRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.svc.WikiRoot, billing.Dir), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cs := f.connect(t, billing)
+	out, isErr := call(t, cs, "save", map[string]any{"type": "fact", "title": "t", "summary": "s", "body": ""})
+	if !isErr || out != "save failed, see mem.log" {
+		t.Errorf("save: isError = %v, text = %q", isErr, out)
+	}
+	if strings.Contains(out, f.home) || strings.ContainsRune(out, filepath.Separator) {
+		t.Errorf("save error leaks a path: %q", out)
+	}
+	if !strings.Contains(f.log.String(), billing.Dir) {
+		t.Errorf("mem.log lacks the full error: %q", f.log.String())
+	}
+
+	for args, want := range map[string]string{
+		`{"type": "Bad Type", "title": "t", "summary": "s", "body": ""}`: "invalid memory type",
+		`{"type": "fact", "title": " ", "summary": "s", "body": ""}`:     "memory title is required",
+		`{"type": "fact", "title": "t", "summary": "", "body": ""}`:      "memory summary is required",
+	} {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(args), &m); err != nil {
+			t.Fatal(err)
+		}
+		if out, isErr := call(t, cs, "save", m); !isErr || !strings.HasPrefix(out, want) {
+			t.Errorf("save %s: isError = %v, text = %q, want prefix %q", args, isErr, out, want)
+		}
+	}
+}
+
+func TestGetCapsWholeResponse(t *testing.T) {
+	f := newFixture(t)
+	var tags []string
+	for i := range 60 {
+		tags = append(tags, "tag-"+strings.Repeat("x", 20)+itoa(int64(i)))
+	}
+	var ids []string
+	for i := range 20 {
+		m, err := f.svc.Save(context.Background(), billing, memory.Input{
+			Type: "fact", Title: "meta " + itoa(int64(i)) + " " + strings.Repeat("t", 200),
+			Summary: strings.Repeat("summary ", 60), Tags: tags,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, m.ID)
+	}
+	cs := f.connect(t, billing)
+	out := mustCall(t, cs, "get", map[string]any{"ids": ids})
+	if len(out) > getMaxBytes {
+		t.Errorf("get returned %d bytes, want <= %d", len(out), getMaxBytes)
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last, "[output truncated") {
+		t.Fatalf("last line = %q, want truncation notice", last)
+	}
+	shown := 0
+	for _, id := range ids {
+		header := strings.Contains(out, "\n"+id+" ") || strings.HasPrefix(out, id+" ")
+		listed := strings.Contains(last, id)
+		if header == listed {
+			t.Errorf("%s: shown = %v, listed as not shown = %v", id, header, listed)
+		}
+		if header {
+			shown++
+		}
+	}
+	if shown == 0 || shown == len(ids) {
+		t.Errorf("shown %d of %d items", shown, len(ids))
+	}
+}
+
+func TestGetCutsSingleOversizedItem(t *testing.T) {
+	items := []store.Item{
+		{Hit: store.Hit{ID: "m-aaaaaaaaaaaa", Type: "fact", Title: "big", At: testNow}, Body: strings.Repeat("é", 15000)},
+		{Hit: store.Hit{ID: "m-bbbbbbbbbbbb", Type: "fact", Title: "next", At: testNow}, Body: "small"},
+	}
+	out := formatItems(items, []string{"m-cccccccccccc"}, getMaxBytes)
+	if len(out) > getMaxBytes || !utf8.ValidString(out) {
+		t.Fatalf("len = %d, valid UTF-8 = %v", len(out), utf8.ValidString(out))
+	}
+	if !strings.HasPrefix(out, "m-aaaaaaaaaaaa ") || !strings.HasSuffix(out, "not found: m-cccccccccccc\n[output truncated at 20000 bytes; m-aaaaaaaaaaaa cut short; not shown: m-bbbbbbbbbbbb]\n") {
+		t.Errorf("out ends with %q", out[len(out)-200:])
+	}
 }

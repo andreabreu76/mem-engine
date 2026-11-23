@@ -3,9 +3,9 @@ package mcpserver
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -92,7 +92,7 @@ func New(d Deps) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "timeline", Description: "Step 2 of 3: show what happened around an id from search, the items of the same session before and after it, in the search line format with the id marked by >. " +
 		"Next, call get only for the ids you need in full."}, handle(s, "timeline", s.timeline))
 	mcp.AddTool(srv, &mcp.Tool{Name: "get", Description: "Step 3 of 3: fetch the full content, header and body, of the ids chosen from search or timeline. " +
-		"Bodies are limited to 20000 bytes per call, so ask only for what you need."}, handle(s, "get", s.get))
+		"The whole response is limited to 20000 bytes and ids that do not fit are listed at the end, so ask only for what you need."}, handle(s, "get", s.get))
 	mcp.AddTool(srv, &mcp.Tool{Name: "save", Description: "Save a curated memory that future sessions should know: a durable fact, decision, gotcha, preference or reference. " +
 		"Use this instead of writing memory files such as MEMORY.md. Recommended types: fact, decision, gotcha, preference, reference. " +
 		"scope project (default) ties it to the current project, user makes it visible in every project. Returns the new id."}, handle(s, "save", s.save))
@@ -106,7 +106,7 @@ func handle[In any](s *server, name string, h func(context.Context, In) (string,
 		text, err := h(ctx, in)
 		if err != nil {
 			s.Log.Warn("mcp tool failed", "tool", name, "err", err)
-			return nil, nil, err
+			return nil, nil, toolError(name, err)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
 	}
@@ -118,7 +118,10 @@ func (s *server) scope(ctx context.Context, name string) (store.Scope, error) {
 	}
 	row, err := s.Store.FindProject(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.Scope{}, fmt.Errorf("unknown project %q", name)
+		return store.Scope{}, userErrorf("unknown project %q", name)
+	}
+	if err != nil && strings.Contains(err.Error(), " is ambiguous") {
+		return store.Scope{}, userError(err.Error())
 	}
 	if err != nil {
 		return store.Scope{}, err
@@ -166,10 +169,10 @@ func contextSize(n *int) int {
 
 func (s *server) get(ctx context.Context, in getIn) (string, error) {
 	if len(in.IDs) == 0 {
-		return "", errors.New("ids is empty")
+		return "", userError("ids is empty")
 	}
 	if len(in.IDs) > maxGetIDs {
-		return "", fmt.Errorf("at most %d ids per call", maxGetIDs)
+		return "", userErrorf("at most %d ids per call", maxGetIDs)
 	}
 	sc, err := s.scope(ctx, in.Project)
 	if err != nil {
@@ -196,7 +199,7 @@ func (s *server) save(ctx context.Context, in saveIn) (string, error) {
 	case "user":
 		p = project.User
 	default:
-		return "", fmt.Errorf("invalid scope %q: want project or user", in.Scope)
+		return "", userErrorf("invalid scope %q: want project or user", in.Scope)
 	}
 	m, err := s.Memory.Save(ctx, p, memory.Input{Type: in.Type, Title: in.Title, Summary: in.Summary, Body: in.Body, Tags: in.Tags})
 	if err != nil {
@@ -211,7 +214,7 @@ func (s *server) update(ctx context.Context, in updateIn) (string, error) {
 	}
 	patch := memory.Patch{Type: in.Type, Title: in.Title, Summary: in.Summary, Body: in.Body, Tags: in.Tags}
 	if patch == (memory.Patch{}) {
-		return "", errors.New("nothing to update: give at least one of type, title, summary, body, tags")
+		return "", userError("nothing to update: give at least one of type, title, summary, body, tags")
 	}
 	if _, err := s.Memory.Update(ctx, in.ID, patch); err != nil {
 		return "", err
@@ -238,5 +241,5 @@ func (s *server) ownMemory(ctx context.Context, id string) error {
 }
 
 func notFound(id string) error {
-	return fmt.Errorf("%s not found", id)
+	return userErrorf("%s not found", id)
 }

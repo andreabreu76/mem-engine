@@ -1,11 +1,11 @@
 package mcpserver
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/andreabreu76/mem-engine/internal/store"
 )
@@ -51,38 +51,85 @@ func formatTimeline(hits []store.Hit, anchor string) string {
 }
 
 func formatItems(items []store.Item, missing []string, maxBytes int) string {
-	var b strings.Builder
+	blocks := make([]string, len(items))
 	for i, it := range items {
-		if i > 0 {
-			b.WriteString("\n---\n")
-		}
-		fmt.Fprintf(&b, "%s %s %s %s\n", it.ID, it.At.UTC().Format(time.DateOnly), it.Type, oneLine(it.Title))
-		fmt.Fprintf(&b, "summary: %s\n", oneLine(it.Summary))
-		if len(it.Tags) > 0 {
-			fmt.Fprintf(&b, "tags: %s\n", strings.Join(it.Tags, ", "))
-		}
-		if it.ToolName != "" {
-			fmt.Fprintf(&b, "tool: %s\n", it.ToolName)
-		}
-		if len(it.Files) > 0 {
-			fmt.Fprintf(&b, "files: %s\n", strings.Join(it.Files, ", "))
-		}
-		if it.Body != "" {
-			b.WriteByte('\n')
-			b.WriteString(strings.TrimRight(it.Body, "\n"))
-			b.WriteByte('\n')
-		}
-		if it.Truncated {
-			fmt.Fprintf(&b, "[body truncated, %d bytes in total per call]\n", maxBytes)
+		blocks[i] = itemBlock(it, maxBytes)
+	}
+	notFound := ""
+	if len(missing) > 0 {
+		notFound = fmt.Sprintf("not found: %s\n", strings.Join(missing, ", "))
+	}
+	for k := len(blocks); k > 0; k-- {
+		footer := notFound + truncationNotice(items[k:], "", maxBytes)
+		if out := withFooter(strings.Join(blocks[:k], "\n---\n"), footer); len(out) <= maxBytes {
+			return out
 		}
 	}
-	if len(missing) > 0 {
-		if len(items) > 0 {
-			b.WriteByte('\n')
-		}
-		fmt.Fprintf(&b, "not found: %s\n", strings.Join(missing, ", "))
+	if len(blocks) == 0 {
+		return notFound
+	}
+	footer := notFound + truncationNotice(items[1:], items[0].ID, maxBytes)
+	room := max(maxBytes-len(footer)-2, 0)
+	return withFooter(cutUTF8(blocks[0], room)+"\n", footer)
+}
+
+func itemBlock(it store.Item, maxBytes int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s %s %s\n", it.ID, it.At.UTC().Format(time.DateOnly), it.Type, oneLine(it.Title))
+	fmt.Fprintf(&b, "summary: %s\n", oneLine(it.Summary))
+	if len(it.Tags) > 0 {
+		fmt.Fprintf(&b, "tags: %s\n", strings.Join(it.Tags, ", "))
+	}
+	if it.ToolName != "" {
+		fmt.Fprintf(&b, "tool: %s\n", it.ToolName)
+	}
+	if len(it.Files) > 0 {
+		fmt.Fprintf(&b, "files: %s\n", strings.Join(it.Files, ", "))
+	}
+	if it.Body != "" {
+		b.WriteByte('\n')
+		b.WriteString(strings.TrimRight(it.Body, "\n"))
+		b.WriteByte('\n')
+	}
+	if it.Truncated {
+		fmt.Fprintf(&b, "[body truncated, %d bytes in total per call]\n", maxBytes)
 	}
 	return b.String()
+}
+
+func truncationNotice(hidden []store.Item, cut string, maxBytes int) string {
+	if len(hidden) == 0 && cut == "" {
+		return ""
+	}
+	notice := fmt.Sprintf("[output truncated at %d bytes", maxBytes)
+	if cut != "" {
+		notice += "; " + cut + " cut short"
+	}
+	if len(hidden) > 0 {
+		ids := make([]string, len(hidden))
+		for i, it := range hidden {
+			ids[i] = it.ID
+		}
+		notice += "; not shown: " + strings.Join(ids, ", ")
+	}
+	return notice + "]\n"
+}
+
+func withFooter(body, footer string) string {
+	if body == "" || footer == "" {
+		return body + footer
+	}
+	return body + "\n" + footer
+}
+
+func cutUTF8(s string, n int) string {
+	if n >= len(s) {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 func oneLine(s string) string {
@@ -111,5 +158,5 @@ func parseSince(s string, now time.Time) (time.Time, error) {
 	if t, err := time.Parse(time.DateOnly, s); err == nil {
 		return t, nil
 	}
-	return time.Time{}, errors.New(`invalid since ` + strconv.Quote(s) + `: want YYYY-MM-DD or <N>d, e.g. 7d`)
+	return time.Time{}, userErrorf("invalid since %q: want YYYY-MM-DD or <N>d, e.g. 7d", s)
 }

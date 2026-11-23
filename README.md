@@ -39,7 +39,7 @@ Retrieval is layered to keep context small: `search` first, `timeline` for conte
 |------|------------|---------|
 | `search` | `query`, `type?`, `since?` (`YYYY-MM-DD` or `7d`), `project?`, `limit?` (10, at most 50) | one line per item: `<id> <date> <type> <title> \| <summary>` |
 | `timeline` | `id`, `before?` (5), `after?` (5), `project?` | the same lines for the items of the same session around `id`, which is marked with `>` |
-| `get` | `ids`, `project?` | header and body of each id, bodies limited to 20000 bytes per call |
+| `get` | `ids`, `project?` | header and body of each id; the whole response is limited to 20000 bytes and ids that do not fit are listed in a final `[output truncated ...]` line |
 | `save` | `type`, `title`, `summary`, `body`, `tags?`, `scope?` (`project` or `user`) | the new memory id |
 | `update` | `id`, `type?`, `title?`, `summary?`, `body?`, `tags?` | the updated id |
 | `forget` | `id` | the deleted id |
@@ -51,7 +51,7 @@ m-3f9a1c2b4d5e 2026-11-20 decision Invoices use UTC | store invoice dates in UTC
 o-1042 2026-11-21 tool Bash: go test ./... | ok  billing-api/internal/invoice 0.412s
 ```
 
-By default `search`, `timeline` and `get` only see the current project plus `user` memories. `project` takes another project's name or key (for example `billing-api` or `/home/dev/src/acme/billing-api`) and the tool descriptions tell the agent to pass it only when you ask about another project. An unknown or ambiguous name is an error, never a search across all projects, and an id outside the scope answers "not found". `update` and `forget` only act on memories of the current project or `user`.
+By default `search`, `timeline` and `get` only see the current project plus `user` memories. `project` takes another project's name or key (for example `billing-api` or `/home/dev/src/acme/billing-api`) and the tool descriptions tell the agent to pass it only when you ask about another project. An unknown or ambiguous name is an error, never a search across all projects, and an id outside the scope answers "not found". `update` and `forget` only act on memories of the current project or `user`. Errors the agent can fix (invalid type, missing title, unknown project, id not found) come back as they are; any other failure answers `<tool> failed, see mem.log` and the full error goes to `logs/mem.log`.
 
 ## Health
 

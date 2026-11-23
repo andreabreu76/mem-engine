@@ -1,5 +1,11 @@
 # DECISIONS
 
+## 23/11/2026, spool publica cada arquivo por temporário e `os.Link`
+
+- Decisão: `spool.Append` grava a linha em `.spool-*.tmp` e publica com `os.Link` para `<pid>-<unixnano>.jsonl`, repetindo com novo nome se já existir; o `Drain` só enxerga `*.jsonl`
+- Por quê: com `O_APPEND|O_CREATE` direto no nome final, um `Drain` de outro processo pode renomear o arquivo entre a criação e a escrita, ler vazio e apagar, perdendo a linha; o `Link` também não sobrescreve um nome repetido no mesmo nanossegundo (relógio do macOS tem resolução de microssegundos)
+- Alternativa rejeitada: `os.Rename` do temporário, que sobrescreve silenciosamente um `.jsonl` de mesmo nome; `flock`, que não é portátil sem cgo
+
 ## 23/11/2026, raiz do git detectada em Go puro, sem chamar o binário `git`
 
 - Decisão: `project.Resolve` sobe até o `.git`; se for arquivo (worktree), lê `gitdir:` e `commondir` para chegar à raiz comum

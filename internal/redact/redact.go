@@ -9,7 +9,6 @@ import (
 
 type pattern struct {
 	re          *regexp.Regexp
-	candidate   *regexp.Regexp
 	replacement string
 	secretGroup int
 }
@@ -23,28 +22,28 @@ var builtin = []struct {
 	expr string
 }{
 	{"pem", `(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`},
-	{"github", `\bgh[pousr]_[A-Za-z0-9]{36,}`},
-	{"github", `\bgithub_pat_[A-Za-z0-9_]{22,}`},
-	{"slack", `\bxox[abprs]-[A-Za-z0-9-]{10,}`},
-	{"aws", `\b(AKIA|ASIA)[0-9A-Z]{16}`},
-	{"aws", `(?i)aws_secret_access_key\s*[=:]\s*\S+`},
-	{"anthropic", `\bsk-ant-[A-Za-z0-9_-]{20,}`},
-	{"openai", `\bsk-(proj-)?[A-Za-z0-9_-]{20,}`},
-	{"jwt", `\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`},
-	{"conn", `://[^\s:/@]+:(?P<secret>[^\s/@]+)@`},
+	{"github", `gh[pousr]_[A-Za-z0-9]{36,}`},
+	{"github", `github_pat_[A-Za-z0-9_]{22,}`},
+	{"slack", `xox[abprs]-[A-Za-z0-9-]{10,}`},
+	{"aws", `(AKIA|ASIA)[0-9A-Z]{16}`},
+	{"aws", `(?i)aws_secret_access_key["']?\s*[=:]\s*(?P<secret>["']?[^\s"']+["']?)`},
+	{"anthropic", `sk-ant-[A-Za-z0-9_-]{20,}`},
+	{"openai", `sk-(proj-)?[A-Za-z0-9_-]{20,}`},
+	{"jwt", `eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`},
+	{"conn", `://[^\s:/@]+:(?P<secret>[^\s/]+)@`},
+	{"conn", `:(?P<secret>[^\s/]+)@(?:tcp|unix)\(`},
 }
 
-var privateRe = regexp.MustCompile(`(?is)<private>.*?(?:</private>|$)`)
+const (
+	privateOpen  = "<private>"
+	privateClose = "</private>"
+)
 
 func New(extra []string, disableBuiltin bool) (*Redactor, error) {
 	r := &Redactor{}
 	if !disableBuiltin {
 		for _, b := range builtin {
-			p := newPattern(regexp.MustCompile(b.expr), b.name)
-			if rest, ok := strings.CutPrefix(b.expr, `\b`); ok {
-				p.candidate = regexp.MustCompile(rest)
-			}
-			r.patterns = append(r.patterns, p)
+			r.patterns = append(r.patterns, newPattern(regexp.MustCompile(b.expr), b.name))
 		}
 	}
 	for i, expr := range extra {
@@ -74,9 +73,6 @@ func (r *Redactor) Clean(s string) string {
 }
 
 func (p pattern) apply(s string) string {
-	if p.candidate != nil && !p.candidate.MatchString(s) {
-		return s
-	}
 	matches := p.re.FindAllStringSubmatchIndex(s, -1)
 	if matches == nil {
 		return s
@@ -98,7 +94,44 @@ func (p pattern) apply(s string) string {
 }
 
 func StripPrivate(s string) string {
-	return pattern{re: privateRe}.apply(s)
+	var b strings.Builder
+	stripped := false
+	depth, last := 0, 0
+	for i := 0; i < len(s); {
+		next := strings.IndexByte(s[i:], '<')
+		if next < 0 {
+			break
+		}
+		i += next
+		switch {
+		case tagAt(s, i, privateOpen):
+			if depth == 0 {
+				b.WriteString(s[last:i])
+				stripped = true
+			}
+			depth++
+			i += len(privateOpen)
+		case depth > 0 && tagAt(s, i, privateClose):
+			depth--
+			i += len(privateClose)
+			if depth == 0 {
+				last = i
+			}
+		default:
+			i++
+		}
+	}
+	if !stripped {
+		return s
+	}
+	if depth == 0 {
+		b.WriteString(s[last:])
+	}
+	return b.String()
+}
+
+func tagAt(s string, i int, tag string) bool {
+	return len(s)-i >= len(tag) && strings.EqualFold(s[i:i+len(tag)], tag)
 }
 
 func Truncate(s string, max int) string {

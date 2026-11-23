@@ -58,25 +58,24 @@ func TestCleanBuiltin(t *testing.T) {
 	}
 }
 
-func TestCleanNoFalsePositiveInsideWords(t *testing.T) {
+func TestCleanTokenAfterWordChars(t *testing.T) {
 	r := mustNew(t, nil, false)
-	for _, in := range []string{
-		"disk-usage-report-generator-v2",
-		"task-" + strings.Repeat("x", 24),
-		"risk-" + "ant-" + strings.Repeat("y", 24),
-		"high" + "ghp_" + strings.Repeat("a", 36),
-		"my" + "github_pat_" + strings.Repeat("b", 22),
-		"inbox" + "xoxb-" + strings.Repeat("1", 12),
-		"STAKIA" + strings.Repeat("Z", 16),
-		"keyeyJ" + strings.Repeat("f", 10) + "." + strings.Repeat("g", 10) + "." + strings.Repeat("h", 10),
-	} {
-		if got := r.Clean(in); got != in {
-			t.Errorf("Clean(%q) = %q, want unchanged", in, got)
-		}
+	cases := []struct {
+		label  string
+		prefix string
+		secret string
+	}{
+		{"github", `\n`, "ghp_" + strings.Repeat("a", 36)},
+		{"openai", "%3D", "sk-" + strings.Repeat("b", 24)},
+		{"aws", "FOO_", "AKIA" + strings.Repeat("Z", 16)},
+		{"slack", "xyz", "xoxb-" + strings.Repeat("1", 12)},
+		{"jwt", "abc", "eyJ" + strings.Repeat("f", 10) + "." + strings.Repeat("g", 10) + "." + strings.Repeat("h", 10)},
 	}
-	mixed := "disk-usage-report-generator-v2 " + "sk-" + strings.Repeat("e", 30)
-	if got, want := r.Clean(mixed), "disk-usage-report-generator-v2 [REDACTED:openai]"; got != want {
-		t.Errorf("Clean(%q) = %q, want %q", mixed, got, want)
+	for _, tc := range cases {
+		got := r.Clean(tc.prefix + tc.secret)
+		if want := tc.prefix + "[REDACTED:" + tc.label + "]"; got != want {
+			t.Errorf("Clean(%q) = %q, want %q", tc.prefix+tc.secret, got, want)
+		}
 	}
 }
 
@@ -103,6 +102,43 @@ func TestCleanConnStringKeepsHost(t *testing.T) {
 	}
 	if strings.Contains(got, "s3cr3t") {
 		t.Errorf("Clean = %q, password kept", got)
+	}
+}
+
+func TestCleanConnPasswordWithAt(t *testing.T) {
+	r := mustNew(t, nil, false)
+	in := "postgres://app:" + "p@ss" + "@db.example.com/x"
+	if got, want := r.Clean(in), "postgres://app:[REDACTED:conn]@db.example.com/x"; got != want {
+		t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+	}
+}
+
+func TestCleanMySQLDSN(t *testing.T) {
+	r := mustNew(t, nil, false)
+	for _, pass := range []string{"hunter" + "22", "p@" + "ss", "pa:" + "ss"} {
+		in := `dsn := "root:` + pass + `@tcp(127.0.0.1:3306)/app"`
+		want := `dsn := "root:[REDACTED:conn]@tcp(127.0.0.1:3306)/app"`
+		if got := r.Clean(in); got != want {
+			t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCleanAWSQuotedKey(t *testing.T) {
+	r := mustNew(t, nil, false)
+	value := strings.Repeat("w", 40)
+	for _, in := range []string{
+		`{"aws_secret_access_key": "` + value + `"}`,
+		`'AWS_SECRET_ACCESS_KEY'='` + value + `'`,
+		`Aws_Secret_Access_Key = ` + value,
+	} {
+		got := r.Clean(in)
+		if strings.Contains(got, value) {
+			t.Errorf("Clean(%q) = %q, value kept", in, got)
+		}
+		if !strings.Contains(got, "[REDACTED:aws]") {
+			t.Errorf("Clean(%q) = %q, want aws label", in, got)
+		}
 	}
 }
 
@@ -164,6 +200,25 @@ func TestStripPrivate(t *testing.T) {
 				t.Errorf("StripPrivate(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestStripPrivateNested(t *testing.T) {
+	for in, want := range map[string]string{
+		"a<private>x<private>y</private>z</private>b": "ab",
+		"a<PRIVATE>x<private>y</Private>z</private>b": "ab",
+		"a<private>x<private>y</private>z":            "a",
+	} {
+		if got := StripPrivate(in); got != want {
+			t.Errorf("StripPrivate(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestStripPrivateOrphanClose(t *testing.T) {
+	in := "a</private>b<private>x</private>c</PRIVATE>d"
+	if got, want := StripPrivate(in), "a</private>bc</PRIVATE>d"; got != want {
+		t.Errorf("StripPrivate(%q) = %q, want %q", in, got, want)
 	}
 }
 

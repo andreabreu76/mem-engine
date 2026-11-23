@@ -11,6 +11,7 @@ var version = "dev"
 const usage = `usage: mem <command>
 
 commands:
+  doctor    check the binary, data dir, database, spool, capture errors and hooks
   gc        delete observations older than retention_days
   hook      record a Claude Code hook event read from stdin
   setup     register the mem hooks in ~/.claude/settings.json (--plan, --yes)
@@ -27,6 +28,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
+	case "doctor":
+		return runDoctor(args[1:], stdout, stderr)
 	case "gc":
 		return runGC(args[1:], stdout, stderr)
 	case "hook":

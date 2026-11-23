@@ -34,15 +34,22 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	home := os.Getenv("MEM_ENGINE_HOME")
-	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return Config{}, fmt.Errorf("resolve home: %w", err)
-		}
-		home = filepath.Join(userHome, ".mem-engine")
+	home, err := HomeDir()
+	if err != nil {
+		return Config{}, err
 	}
 	return LoadFrom(home)
+}
+
+func HomeDir() (string, error) {
+	if home := os.Getenv("MEM_ENGINE_HOME"); home != "" {
+		return home, nil
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home: %w", err)
+	}
+	return filepath.Join(userHome, ".mem-engine"), nil
 }
 
 func LoadFrom(home string) (Config, error) {

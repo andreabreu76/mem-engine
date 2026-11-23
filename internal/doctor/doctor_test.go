@@ -1,0 +1,251 @@
+package doctor
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	_ "modernc.org/sqlite"
+
+	"github.com/andreabreu76/mem-engine/internal/config"
+	"github.com/andreabreu76/mem-engine/internal/setup"
+	"github.com/andreabreu76/mem-engine/internal/spool"
+	"github.com/andreabreu76/mem-engine/internal/store"
+)
+
+func newEnv(t *testing.T) Env {
+	t.Helper()
+	userHome := t.TempDir()
+	dataHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("MEM_ENGINE_HOME", dataHome)
+	cfg, err := config.LoadFrom(dataHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Env{
+		Cfg:        cfg,
+		UserHome:   userHome,
+		LookPath:   func(string) (string, error) { return "", errors.New("not found") },
+		Executable: filepath.Join(userHome, "bin", "mem"),
+		Now:        time.Now(),
+	}
+}
+
+func installHooks(t *testing.T, env Env) {
+	t.Helper()
+	data, _, err := setup.MergeHooks(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(env.UserHome, ".claude", "settings.json"), string(data))
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createDB(t *testing.T, env Env) {
+	t.Helper()
+	st, err := store.Open(env.Cfg.DBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func find(t *testing.T, checks []Check, name string) Check {
+	t.Helper()
+	for _, c := range checks {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("check %q missing from %+v", name, checks)
+	return Check{}
+}
+
+func TestDoctorHealthy(t *testing.T) {
+	env := newEnv(t)
+	installHooks(t, env)
+	createDB(t, env)
+
+	checks := Run(context.Background(), env)
+	want := []string{"binary", "config", "data-dir", "database", "spool", "capture-errors", "hooks"}
+	if len(checks) != len(want) {
+		t.Fatalf("got %d checks, want %d: %+v", len(checks), len(want), checks)
+	}
+	for i, c := range checks {
+		if c.Name != want[i] {
+			t.Errorf("check %d = %q, want %q", i, c.Name, want[i])
+		}
+		if c.Name != "binary" && c.Level != OK {
+			t.Errorf("%s = %v %q, want OK", c.Name, c.Level, c.Detail)
+		}
+	}
+	if got := find(t, checks, "binary"); got.Level != Warn {
+		t.Errorf("binary = %v %q, want Warn", got.Level, got.Detail)
+	}
+	entries, err := os.ReadDir(env.Cfg.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "mem.db") {
+			t.Errorf("doctor left %q in the data dir", e.Name())
+		}
+	}
+}
+
+func TestDoctorBinaryOnPath(t *testing.T) {
+	env := newEnv(t)
+	bin := filepath.Join(env.UserHome, "bin", "mem")
+	writeFile(t, bin, "")
+	link := filepath.Join(env.UserHome, "mem-link")
+	if err := os.Symlink(bin, link); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	env.Executable = bin
+	env.LookPath = func(string) (string, error) { return link, nil }
+	if got := find(t, Run(context.Background(), env), "binary"); got.Level != OK {
+		t.Errorf("binary = %v %q, want OK", got.Level, got.Detail)
+	}
+
+	other := filepath.Join(env.UserHome, "other", "mem")
+	writeFile(t, other, "")
+	env.LookPath = func(string) (string, error) { return other, nil }
+	got := find(t, Run(context.Background(), env), "binary")
+	if got.Level != Warn || !strings.Contains(got.Detail, other) {
+		t.Errorf("binary = %v %q, want Warn naming %s", got.Level, got.Detail, other)
+	}
+}
+
+func TestDoctorSpoolPending(t *testing.T) {
+	env := newEnv(t)
+	installHooks(t, env)
+	createDB(t, env)
+	for range 3 {
+		if err := spool.Append(env.Cfg.SpoolDir(), map[string]string{"kind": "prompt"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := find(t, Run(context.Background(), env), "spool")
+	if got.Level != Warn || !strings.Contains(got.Detail, "3") {
+		t.Errorf("spool = %v %q, want Warn with count 3", got.Level, got.Detail)
+	}
+}
+
+func TestDoctorCaptureErrors(t *testing.T) {
+	env := newEnv(t)
+	installHooks(t, env)
+	st, err := store.Open(env.Cfg.DBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := st.RecordCaptureError(ctx, "PostToolUse", "old failure", env.Now.Add(-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordCaptureError(ctx, "PostToolUse", "disk full", env.Now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	got := find(t, Run(ctx, env), "capture-errors")
+	if got.Level != Warn || !strings.Contains(got.Detail, "1 ") || !strings.Contains(got.Detail, "disk full") {
+		t.Errorf("capture-errors = %v %q, want Warn with 1 and the last message", got.Level, got.Detail)
+	}
+}
+
+func TestDoctorSchemaTooNew(t *testing.T) {
+	env := newEnv(t)
+	installHooks(t, env)
+	createDB(t, env)
+	db, err := sql.Open("sqlite", env.Cfg.DBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE schema_version SET version = 99"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	got := find(t, Run(context.Background(), env), "database")
+	if got.Level != Fail || !strings.Contains(got.Detail, "upgrade mem") {
+		t.Errorf("database = %v %q, want Fail with upgrade mem", got.Level, got.Detail)
+	}
+}
+
+func TestDoctorNoDatabaseDoesNotCreate(t *testing.T) {
+	env := newEnv(t)
+	installHooks(t, env)
+	missing := filepath.Join(env.Cfg.Home, "absent")
+	env.Cfg.Home = missing
+
+	checks := Run(context.Background(), env)
+	if got := find(t, checks, "database"); got.Level != Warn || !strings.Contains(got.Detail, "no database yet") {
+		t.Errorf("database = %v %q, want Warn no database yet", got.Level, got.Detail)
+	}
+	if got := find(t, checks, "data-dir"); got.Level != Warn {
+		t.Errorf("data-dir = %v %q, want Warn", got.Level, got.Detail)
+	}
+	for _, c := range checks {
+		if c.Level == Fail {
+			t.Errorf("%s = Fail %q", c.Name, c.Detail)
+		}
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("doctor created %s: %v", missing, err)
+	}
+}
+
+func TestDoctorBrokenConfig(t *testing.T) {
+	env := newEnv(t)
+	installHooks(t, env)
+	writeFile(t, filepath.Join(env.Cfg.Home, "config.toml"), "retention_days = [")
+	if got := find(t, Run(context.Background(), env), "config"); got.Level != Fail {
+		t.Errorf("config = %v %q, want Fail", got.Level, got.Detail)
+	}
+}
+
+func TestDoctorMissingHooks(t *testing.T) {
+	env := newEnv(t)
+	createDB(t, env)
+	settings := filepath.Join(env.UserHome, ".claude", "settings.json")
+
+	got := find(t, Run(context.Background(), env), "hooks")
+	if got.Level != Warn || !strings.Contains(got.Detail, "run mem setup") {
+		t.Errorf("no settings: hooks = %v %q, want Warn run mem setup", got.Level, got.Detail)
+	}
+
+	writeFile(t, settings, `{"theme": "dark"}`)
+	got = find(t, Run(context.Background(), env), "hooks")
+	if got.Level != Warn || !strings.Contains(got.Detail, "run mem setup") {
+		t.Errorf("no mem hooks: hooks = %v %q, want Warn run mem setup", got.Level, got.Detail)
+	}
+
+	writeFile(t, settings, `{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mem hook Stop"}]}]}}`)
+	got = find(t, Run(context.Background(), env), "hooks")
+	if got.Level != Warn || !strings.Contains(got.Detail, "hooks outdated, run mem setup") {
+		t.Errorf("partial hooks: hooks = %v %q, want Warn outdated", got.Level, got.Detail)
+	}
+
+	writeFile(t, settings, `{"hooks": `)
+	got = find(t, Run(context.Background(), env), "hooks")
+	if got.Level != Warn || !strings.Contains(got.Detail, "invalid JSON") {
+		t.Errorf("invalid settings: hooks = %v %q, want Warn invalid JSON", got.Level, got.Detail)
+	}
+}

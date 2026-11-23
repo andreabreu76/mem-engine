@@ -363,3 +363,24 @@ func TestResolveGitFileWithoutCommonDirKeepsOwnDirectory(t *testing.T) {
 		t.Errorf("Key = %q, want %q", p.Key, want)
 	}
 }
+
+func TestResolveFullyForgedGitDirKeepsOwnDirectory(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim")
+	initRepo(t, victim)
+	forged := filepath.Join(root, "forged")
+	g := filepath.Join(forged, "g")
+	mkdir(t, g)
+	writeFile(t, filepath.Join(forged, ".git"), "gitdir: ./g\n")
+	writeFile(t, filepath.Join(g, "gitdir"), filepath.Join(forged, ".git")+"\n")
+	writeFile(t, filepath.Join(g, "commondir"), filepath.Join(victim, ".git")+"\n")
+
+	p := resolve(t, forged, config.Config{})
+	if want := realPath(t, forged); p.Key != want {
+		t.Errorf("Key = %q, want %q", p.Key, want)
+	}
+	if p.Name != "forged" {
+		t.Errorf("Name = %q, want forged", p.Name)
+	}
+}

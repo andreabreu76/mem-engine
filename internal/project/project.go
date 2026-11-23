@@ -164,6 +164,9 @@ func rootFromGitFile(dotGit string) (string, bool) {
 		common = filepath.Join(gitDir, common)
 	}
 	common = evalOrClean(common)
+	if filepath.Dir(evalOrClean(gitDir)) != filepath.Join(common, "worktrees") {
+		return "", false
+	}
 	if filepath.Base(common) == ".git" {
 		return filepath.Dir(common), true
 	}

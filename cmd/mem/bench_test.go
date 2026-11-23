@@ -159,3 +159,34 @@ func TestBenchCommandBadArgs(t *testing.T) {
 		t.Errorf("missing path: code = %d, stderr = %q", code, errb.String())
 	}
 }
+
+func TestBenchCommandNativeFromRepoRootWithGroup(t *testing.T) {
+	home := setHome(t)
+	dir, repo := benchRepo(t)
+	group := filepath.Dir(repo.Key)
+	cfg := fmt.Sprintf("[[group]]\nname = \"acme\"\nprefix = %q\n", group)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	grouped, err := project.Resolve(dir, loaded)
+	if err != nil || grouped.Key != group || grouped.Name != "acme" {
+		t.Fatalf("grouped project = %+v, %v", grouped, err)
+	}
+	writeNative(t, bench.NativeMemoryPath(os.Getenv("HOME"), repo.Key), strings.Repeat(strings.Repeat("n", 39)+"\n", 100))
+	writeNative(t, bench.NativeMemoryPath(os.Getenv("HOME"), group), "n\n")
+
+	var out, errb bytes.Buffer
+	if code := run([]string{"bench", dir}, nil, &out, &errb); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errb.String())
+	}
+	want := "native MEMORY.md: 4000 bytes loaded (~1000 tokens)\n" +
+		"mem-engine handoff: 91 bytes (~22 tokens)\n" +
+		"saving: ~978 tokens per session (98%)\n"
+	if out.String() != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", out.String(), want)
+	}
+}

@@ -87,7 +87,11 @@ func benchmark(path, native string) (bench.Result, error) {
 		if err != nil {
 			return bench.Result{}, err
 		}
-		native = bench.NativeMemoryPath(userHome, p.Key)
+		repo, err := project.Resolve(path, config.Config{})
+		if err != nil {
+			return bench.Result{}, err
+		}
+		native = bench.NativeMemoryPath(userHome, repo.Key)
 	}
 	var st *store.Store
 	if _, err := os.Stat(cfg.DBPath()); err == nil {

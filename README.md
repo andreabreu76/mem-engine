@@ -80,7 +80,7 @@ Checks: `binary` (the `mem` on `PATH` is the one running), `config` (`config.tom
 mem bench [path] [--native file]
 ```
 
-Compares what Claude Code's native memory loads at the start of every session with the handoff mem-engine injects instead. The native side is the project's `MEMORY.md` under `~/.claude/projects/<encoded project path>/memory/`, counted the way Claude Code loads it: the first 200 lines, at most 25 KB. The mem-engine side is the handoff a new session of the project would receive now (at most 1200 bytes). Tokens are estimated as bytes / 4. `path` defaults to the working directory and `--native` points to another `MEMORY.md`.
+Compares what Claude Code's native memory loads at the start of every session with the handoff mem-engine injects instead. The native side is the project's `MEMORY.md` under `~/.claude/projects/<encoded repository root>/memory/` (the git root of `path`, groups and aliases do not apply), counted the way Claude Code loads it: the first 200 lines, at most 25 KB. The mem-engine side is the handoff a new session of the project would receive now (at most 1200 bytes). Tokens are estimated as bytes / 4. `path` defaults to the working directory and `--native` points to another `MEMORY.md`.
 
 ```
 native MEMORY.md: 18432 bytes loaded (~4608 tokens)

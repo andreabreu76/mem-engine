@@ -274,3 +274,30 @@ func TestFindProject(t *testing.T) {
 		t.Errorf("FindProject(missing) err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestListMemories(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	late := sampleMemory("m-00000000000a", "Late")
+	late.Created = late.Created.Add(time.Hour)
+	tieB := sampleMemory("m-00000000000c", "Tie c")
+	tieA := sampleMemory("m-00000000000b", "Tie b")
+	other := sampleMemory("m-00000000000d", "Other project")
+	other.Project = "/home/dev/src/acme/web"
+	for _, m := range []Memory{late, tieB, tieA, other} {
+		if err := s.UpsertMemory(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListMemories(ctx, "/home/dev/src/billing-api")
+	if err != nil {
+		t.Fatalf("ListMemories: %v", err)
+	}
+	if want := []Memory{tieA, tieB, late}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ListMemories = %+v, want %+v", got, want)
+	}
+	empty, err := s.ListMemories(ctx, "user")
+	if err != nil || len(empty) != 0 {
+		t.Errorf("ListMemories(user) = %+v, %v", empty, err)
+	}
+}

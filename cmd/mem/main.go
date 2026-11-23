@@ -21,6 +21,7 @@ commands:
   doctor    check the binary, data dir, database, spool, capture errors and hooks
   gc        delete observations older than retention_days
   hook      record a Claude Code hook event read from stdin
+  import    import Claude Code native memory files (<dir> [--project <path-or-name>] [--user] [--dry-run])
   mcp       serve the memory tools to Claude Code over stdio (MCP)
   reindex   rebuild the memory index from the wiki
   setup     register the mem hooks and the mem-engine MCP server (--plan, --yes)
@@ -46,6 +47,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runGC(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdin, stdout, stderr)
+	case "import":
+		return runImport(args[1:], stdout, stderr)
 	case "mcp":
 		return runMCP(args[1:], stderr)
 	case "reindex":

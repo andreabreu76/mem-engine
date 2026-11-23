@@ -338,6 +338,10 @@ func validatePatch(p Patch) error {
 	return nil
 }
 
+func Validate(in Input) error {
+	return validate(in.Type, in.Title, in.Summary)
+}
+
 func validate(typ, title, summary string) error {
 	if err := validateType(typ); err != nil {
 		return err

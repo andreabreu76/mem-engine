@@ -117,6 +117,26 @@ func (s *Store) GetMemory(ctx context.Context, id string) (Memory, error) {
 	return m, nil
 }
 
+func (s *Store) ListMemories(ctx context.Context, project string) ([]Memory, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+memoryColumns+" FROM memories WHERE project = ? ORDER BY created_at, id", project)
+	if err != nil {
+		return nil, fmt.Errorf("list memories %s: %w", project, err)
+	}
+	defer rows.Close()
+	var ms []Memory
+	for rows.Next() {
+		m, err := scanMemory(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list memories %s: %w", project, err)
+		}
+		ms = append(ms, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list memories %s: %w", project, err)
+	}
+	return ms, nil
+}
+
 func (s *Store) ReplaceAllMemories(ctx context.Context, ms []Memory) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 
 type pattern struct {
 	re          *regexp.Regexp
+	candidate   *regexp.Regexp
 	replacement string
 	secretGroup int
 }
@@ -22,14 +23,14 @@ var builtin = []struct {
 	expr string
 }{
 	{"pem", `(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`},
-	{"github", `gh[pousr]_[A-Za-z0-9]{36,}`},
-	{"github", `github_pat_[A-Za-z0-9_]{22,}`},
-	{"slack", `xox[abprs]-[A-Za-z0-9-]{10,}`},
-	{"aws", `(AKIA|ASIA)[0-9A-Z]{16}`},
+	{"github", `\bgh[pousr]_[A-Za-z0-9]{36,}`},
+	{"github", `\bgithub_pat_[A-Za-z0-9_]{22,}`},
+	{"slack", `\bxox[abprs]-[A-Za-z0-9-]{10,}`},
+	{"aws", `\b(AKIA|ASIA)[0-9A-Z]{16}`},
 	{"aws", `(?i)aws_secret_access_key\s*[=:]\s*\S+`},
-	{"anthropic", `sk-ant-[A-Za-z0-9_-]{20,}`},
-	{"openai", `sk-(proj-)?[A-Za-z0-9_-]{20,}`},
-	{"jwt", `eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`},
+	{"anthropic", `\bsk-ant-[A-Za-z0-9_-]{20,}`},
+	{"openai", `\bsk-(proj-)?[A-Za-z0-9_-]{20,}`},
+	{"jwt", `\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`},
 	{"conn", `://[^\s:/@]+:(?P<secret>[^\s/@]+)@`},
 }
 
@@ -39,7 +40,11 @@ func New(extra []string, disableBuiltin bool) (*Redactor, error) {
 	r := &Redactor{}
 	if !disableBuiltin {
 		for _, b := range builtin {
-			r.patterns = append(r.patterns, newPattern(regexp.MustCompile(b.expr), b.name))
+			p := newPattern(regexp.MustCompile(b.expr), b.name)
+			if rest, ok := strings.CutPrefix(b.expr, `\b`); ok {
+				p.candidate = regexp.MustCompile(rest)
+			}
+			r.patterns = append(r.patterns, p)
 		}
 	}
 	for i, expr := range extra {
@@ -69,6 +74,9 @@ func (r *Redactor) Clean(s string) string {
 }
 
 func (p pattern) apply(s string) string {
+	if p.candidate != nil && !p.candidate.MatchString(s) {
+		return s
+	}
 	matches := p.re.FindAllStringSubmatchIndex(s, -1)
 	if matches == nil {
 		return s

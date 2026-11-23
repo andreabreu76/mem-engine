@@ -16,13 +16,15 @@ func mustNew(t *testing.T, extra []string, disableBuiltin bool) *Redactor {
 	return r
 }
 
-func TestCleanBuiltin(t *testing.T) {
+type builtinCase struct {
+	name   string
+	label  string
+	secret string
+}
+
+func builtinCases() []builtinCase {
 	pemBody := strings.Repeat("Q", 64)
-	cases := []struct {
-		name   string
-		label  string
-		secret string
-	}{
+	return []builtinCase{
 		{"github classic", "github", "ghp_" + strings.Repeat("a", 36)},
 		{"github fine grained", "github", "github_pat_" + strings.Repeat("b", 22)},
 		{"slack", "slack", "xoxb-" + strings.Repeat("1", 12)},
@@ -34,20 +36,47 @@ func TestCleanBuiltin(t *testing.T) {
 		{"jwt", "jwt", "eyJ" + strings.Repeat("f", 10) + "." + strings.Repeat("g", 10) + "." + strings.Repeat("h", 10)},
 		{"pem", "pem", "-----BEGIN " + "RSA PRIVATE KEY-----\n" + pemBody + "\n-----END RSA PRIVATE KEY-----"},
 	}
+}
+
+func TestCleanBuiltin(t *testing.T) {
 	r := mustNew(t, nil, false)
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := r.Clean("before " + tc.secret + " after")
-			if !strings.Contains(got, "[REDACTED:"+tc.label+"]") {
-				t.Errorf("Clean = %q, want label %q", got, tc.label)
-			}
-			if strings.Contains(got, tc.secret) {
-				t.Errorf("Clean = %q, still contains the secret", got)
-			}
-			if !strings.HasPrefix(got, "before ") || !strings.HasSuffix(got, " after") {
-				t.Errorf("Clean = %q, surrounding text lost", got)
-			}
-		})
+	for _, tc := range builtinCases() {
+		for _, prefix := range []string{"", "before ", "key=", `json "`} {
+			t.Run(tc.name+"/"+prefix, func(t *testing.T) {
+				got := r.Clean(prefix + tc.secret + " after")
+				if !strings.Contains(got, "[REDACTED:"+tc.label+"]") {
+					t.Errorf("Clean = %q, want label %q", got, tc.label)
+				}
+				if strings.Contains(got, tc.secret) {
+					t.Errorf("Clean = %q, still contains the secret", got)
+				}
+				if !strings.HasPrefix(got, prefix) || !strings.HasSuffix(got, " after") {
+					t.Errorf("Clean = %q, surrounding text lost", got)
+				}
+			})
+		}
+	}
+}
+
+func TestCleanNoFalsePositiveInsideWords(t *testing.T) {
+	r := mustNew(t, nil, false)
+	for _, in := range []string{
+		"disk-usage-report-generator-v2",
+		"task-" + strings.Repeat("x", 24),
+		"risk-" + "ant-" + strings.Repeat("y", 24),
+		"high" + "ghp_" + strings.Repeat("a", 36),
+		"my" + "github_pat_" + strings.Repeat("b", 22),
+		"inbox" + "xoxb-" + strings.Repeat("1", 12),
+		"STAKIA" + strings.Repeat("Z", 16),
+		"keyeyJ" + strings.Repeat("f", 10) + "." + strings.Repeat("g", 10) + "." + strings.Repeat("h", 10),
+	} {
+		if got := r.Clean(in); got != in {
+			t.Errorf("Clean(%q) = %q, want unchanged", in, got)
+		}
+	}
+	mixed := "disk-usage-report-generator-v2 " + "sk-" + strings.Repeat("e", 30)
+	if got, want := r.Clean(mixed), "disk-usage-report-generator-v2 [REDACTED:openai]"; got != want {
+		t.Errorf("Clean(%q) = %q, want %q", mixed, got, want)
 	}
 }
 

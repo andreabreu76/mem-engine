@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/andreabreu76/mem-engine/internal/memory"
 )
 
 type userError string
@@ -20,11 +22,8 @@ func toolError(tool string, err error) error {
 		return ue
 	}
 	msg := err.Error()
-	switch {
-	case strings.HasPrefix(msg, "invalid memory type "),
-		msg == "memory title is required",
-		msg == "memory summary is required",
-		strings.Contains(msg, ": file holds memory ") && strings.HasSuffix(msg, "(run mem reindex)"):
+	if errors.Is(err, memory.ErrInvalid) ||
+		strings.Contains(msg, ": file holds memory ") && strings.HasSuffix(msg, "(run mem reindex)") {
 		return err
 	}
 	return fmt.Errorf("%s failed, see mem.log", tool)

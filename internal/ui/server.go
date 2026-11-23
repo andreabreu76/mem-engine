@@ -73,7 +73,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 		switch r.Method {
-		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+		default:
 			if !s.localOrigin(r.Header.Get("Origin"), "http://") {
 				writeError(w, http.StatusForbidden, "forbidden origin")
 				return

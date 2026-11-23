@@ -6,16 +6,12 @@ import (
 )
 
 func (s *Store) Feed(ctx context.Context, afterID int64, projects []string, limit int) ([]Hit, error) {
-	if limit <= 0 {
+	if limit <= 0 || len(projects) == 0 {
 		return nil, nil
 	}
-	where, args := "t.id > ?", []any{afterID}
-	if len(projects) > 0 {
-		clause, scopeArgs := scopeClause("t.project", Scope{Projects: projects})
-		where += " AND " + clause
-		args = append(args, scopeArgs...)
-	}
-	q := "SELECT " + observationCorpus.cols + ", 0 FROM observations t WHERE " + where + " ORDER BY t.id ASC LIMIT ?"
+	where, args := scopeClause("t.project", Scope{Projects: projects})
+	args = append([]any{afterID}, args...)
+	q := "SELECT " + observationCorpus.cols + ", 0 FROM observations t WHERE t.id > ? AND " + where + " ORDER BY t.id ASC LIMIT ?"
 	hits, err := s.queryHits(ctx, kindObservation, q, append(args, limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("feed after %d: %w", afterID, err)

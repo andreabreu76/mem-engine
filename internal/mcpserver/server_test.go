@@ -408,8 +408,8 @@ func TestInternalErrorIsShort(t *testing.T) {
 
 	for args, want := range map[string]string{
 		`{"type": "Bad Type", "title": "t", "summary": "s", "body": ""}`: "invalid memory type",
-		`{"type": "fact", "title": " ", "summary": "s", "body": ""}`:     "memory title is required",
-		`{"type": "fact", "title": "t", "summary": "", "body": ""}`:      "memory summary is required",
+		`{"type": "fact", "title": " ", "summary": "s", "body": ""}`:     "invalid memory: title is required",
+		`{"type": "fact", "title": "t", "summary": "", "body": ""}`:      "invalid memory: summary is required",
 	} {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(args), &m); err != nil {

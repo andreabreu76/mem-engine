@@ -42,6 +42,8 @@ type Service struct {
 	beforeReplace func()
 }
 
+var ErrInvalid = errors.New("invalid memory")
+
 var (
 	typePattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	idPattern     = regexp.MustCompile(`^m-[0-9a-f]{12}$`)
@@ -308,7 +310,7 @@ func validName(name string) bool {
 
 func validateType(typ string) error {
 	if !typePattern.MatchString(typ) {
-		return fmt.Errorf("invalid memory type %q: want lowercase letters, digits and dashes, starting with a letter, up to 32 characters (e.g. fact, decision, gotcha, preference, reference)", typ)
+		return fmt.Errorf("%w type %q: want lowercase letters, digits and dashes, starting with a letter, up to 32 characters (e.g. fact, decision, gotcha, preference, reference)", ErrInvalid, typ)
 	}
 	return nil
 }
@@ -318,10 +320,10 @@ func validate(typ, title, summary string) error {
 		return err
 	}
 	if strings.TrimSpace(title) == "" {
-		return errors.New("memory title is required")
+		return fmt.Errorf("%w: title is required", ErrInvalid)
 	}
 	if strings.TrimSpace(summary) == "" {
-		return errors.New("memory summary is required")
+		return fmt.Errorf("%w: summary is required", ErrInvalid)
 	}
 	return nil
 }

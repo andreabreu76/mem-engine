@@ -86,24 +86,15 @@ type healthJSON struct {
 	LastError        string `json:"last_error"`
 }
 
-type selection struct {
-	all   bool
-	scope store.Scope
-}
-
-func (sel selection) contains(projectKey string) bool {
-	return sel.all || slices.Contains(sel.scope.Projects, projectKey)
-}
-
-func (s *Server) selection(r *http.Request) (selection, error) {
+func (s *Server) scope(r *http.Request) (store.Scope, error) {
 	name := r.URL.Query().Get("project")
 	switch name {
 	case "":
-		return selection{}, badRequest("project is required: a project name or key, or * for all projects")
+		return store.Scope{}, badRequest("project is required: a project name or key, or * for all projects")
 	case allProjects:
 		rows, err := s.Store.ListProjects(r.Context())
 		if err != nil {
-			return selection{}, err
+			return store.Scope{}, err
 		}
 		keys := []string{"user"}
 		for _, p := range rows {
@@ -111,19 +102,19 @@ func (s *Server) selection(r *http.Request) (selection, error) {
 				keys = append(keys, p.Key)
 			}
 		}
-		return selection{all: true, scope: store.Scope{Projects: keys}}, nil
+		return store.Scope{Projects: keys}, nil
 	}
 	row, err := s.Store.FindProject(r.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
-		return selection{}, badRequest("unknown project")
+		return store.Scope{}, badRequest("unknown project")
 	}
 	if err != nil && strings.Contains(err.Error(), " is ambiguous") {
-		return selection{}, badRequest(err.Error())
+		return store.Scope{}, badRequest(err.Error())
 	}
 	if err != nil {
-		return selection{}, err
+		return store.Scope{}, err
 	}
-	return selection{scope: store.CurrentScope(row.Key)}, nil
+	return store.CurrentScope(row.Key), nil
 }
 
 func (s *Server) projects(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -139,7 +130,7 @@ func (s *Server) projects(_ http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) feed(_ http.ResponseWriter, r *http.Request) (any, error) {
-	sel, err := s.selection(r)
+	sc, err := s.scope(r)
 	if err != nil {
 		return nil, err
 	}
@@ -150,11 +141,7 @@ func (s *Server) feed(_ http.ResponseWriter, r *http.Request) (any, error) {
 			return nil, badRequest("after must be a non-negative observation number")
 		}
 	}
-	projects := sel.scope.Projects
-	if sel.all {
-		projects = nil
-	}
-	hits, err := s.Store.Feed(r.Context(), after, projects, feedLimit)
+	hits, err := s.Store.Feed(r.Context(), after, sc.Projects, feedLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +149,7 @@ func (s *Server) feed(_ http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) search(_ http.ResponseWriter, r *http.Request) (any, error) {
-	sel, err := s.selection(r)
+	sc, err := s.scope(r)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +162,7 @@ func (s *Server) search(_ http.ResponseWriter, r *http.Request) (any, error) {
 		}
 	}
 	hits, err := s.Store.Search(r.Context(), store.SearchParams{
-		Query: q.Get("q"), Type: q.Get("type"), Since: since, Limit: searchLimit, Scope: sel.scope,
+		Query: q.Get("q"), Type: q.Get("type"), Since: since, Limit: searchLimit, Scope: sc,
 	})
 	if err != nil {
 		return nil, err
@@ -184,19 +171,19 @@ func (s *Server) search(_ http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) item(_ http.ResponseWriter, r *http.Request) (any, error) {
-	sel, err := s.selection(r)
+	sc, err := s.scope(r)
 	if err != nil {
 		return nil, err
 	}
 	id := r.PathValue("id")
-	items, err := s.Store.Get(r.Context(), []string{id}, sel.scope, itemMaxBytes)
+	items, err := s.Store.Get(r.Context(), []string{id}, sc, itemMaxBytes)
 	if err != nil {
 		return nil, err
 	}
 	if len(items) == 0 {
 		return nil, errNotFound
 	}
-	timeline, err := s.Store.Timeline(r.Context(), id, timelineContext, timelineContext, sel.scope)
+	timeline, err := s.Store.Timeline(r.Context(), id, timelineContext, timelineContext, sc)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, errNotFound
 	}
@@ -207,7 +194,7 @@ func (s *Server) item(_ http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) updateMemory(_ http.ResponseWriter, r *http.Request) (any, error) {
-	sel, err := s.selection(r)
+	sc, err := s.scope(r)
 	if err != nil {
 		return nil, err
 	}
@@ -220,14 +207,14 @@ func (s *Server) updateMemory(_ http.ResponseWriter, r *http.Request) (any, erro
 		return nil, badRequest("nothing to update: give at least one of type, title, summary, body, tags")
 	}
 	id := r.PathValue("id")
-	if err := s.ownMemory(r.Context(), sel, id); err != nil {
+	if err := s.ownMemory(r.Context(), sc, id); err != nil {
 		return nil, err
 	}
 	m, err := s.Memory.Update(r.Context(), id, patch)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, errNotFound
 	}
-	if err != nil && isValidationError(err) {
+	if errors.Is(err, memory.ErrInvalid) {
 		return nil, badRequest(err.Error())
 	}
 	if err != nil {
@@ -237,12 +224,12 @@ func (s *Server) updateMemory(_ http.ResponseWriter, r *http.Request) (any, erro
 }
 
 func (s *Server) deleteMemory(_ http.ResponseWriter, r *http.Request) (any, error) {
-	sel, err := s.selection(r)
+	sc, err := s.scope(r)
 	if err != nil {
 		return nil, err
 	}
 	id := r.PathValue("id")
-	if err := s.ownMemory(r.Context(), sel, id); err != nil {
+	if err := s.ownMemory(r.Context(), sc, id); err != nil {
 		return nil, err
 	}
 	if err := s.Memory.Forget(r.Context(), id); errors.Is(err, store.ErrNotFound) {
@@ -254,7 +241,7 @@ func (s *Server) deleteMemory(_ http.ResponseWriter, r *http.Request) (any, erro
 }
 
 func (s *Server) deleteObservation(_ http.ResponseWriter, r *http.Request) (any, error) {
-	sel, err := s.selection(r)
+	sc, err := s.scope(r)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +251,7 @@ func (s *Server) deleteObservation(_ http.ResponseWriter, r *http.Request) (any,
 	if !ok || err != nil || rowid <= 0 || "o-"+strconv.FormatInt(rowid, 10) != id {
 		return nil, errNotFound
 	}
-	items, err := s.Store.Get(r.Context(), []string{id}, sel.scope, 1)
+	items, err := s.Store.Get(r.Context(), []string{id}, sc, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -291,9 +278,9 @@ func (s *Server) health(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return healthJSON{SpoolPending: pending, CaptureErrors24h: count, LastError: last}, nil
 }
 
-func (s *Server) ownMemory(ctx context.Context, sel selection, id string) error {
+func (s *Server) ownMemory(ctx context.Context, sc store.Scope, id string) error {
 	m, err := s.Store.GetMemory(ctx, id)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && !sel.contains(m.Project)) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && !slices.Contains(sc.Projects, m.Project)) {
 		return errNotFound
 	}
 	return err
@@ -321,13 +308,6 @@ func jsonError(err error) error {
 		return err
 	}
 	return badRequest("invalid JSON body: " + err.Error())
-}
-
-func isValidationError(err error) bool {
-	msg := err.Error()
-	return strings.HasPrefix(msg, "invalid memory type ") ||
-		msg == "memory title is required" ||
-		msg == "memory summary is required"
 }
 
 func toHits(hits []store.Hit) []hitJSON {

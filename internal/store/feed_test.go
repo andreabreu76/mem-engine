@@ -24,7 +24,12 @@ func TestFeedReturnsNewerObservationsAscending(t *testing.T) {
 	user := addObservation(t, s, "s3", "user", "user wide", "body user", searchNow.Add(-1*day))
 	addMemory(t, s, "m-000000000001", "billing-api", "memory", "body", "s1", searchNow)
 
-	all, err := s.Feed(ctx, 0, nil, 10)
+	none, err := s.Feed(ctx, 0, nil, 10)
+	if err != nil || len(none) != 0 {
+		t.Fatalf("Feed without projects = %v, %v, want no rows", hitIDs(none), err)
+	}
+	every := []string{"billing-api", "ledger", "user"}
+	all, err := s.Feed(ctx, 0, every, 10)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -45,7 +50,7 @@ func TestFeedReturnsNewerObservationsAscending(t *testing.T) {
 		t.Fatalf("Feed scoped = %v, want %v", got, want)
 	}
 
-	limited, err := s.Feed(ctx, 0, nil, 2)
+	limited, err := s.Feed(ctx, 0, every, 2)
 	if err != nil {
 		t.Fatalf("Feed limited: %v", err)
 	}

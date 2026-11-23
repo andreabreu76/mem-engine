@@ -175,8 +175,8 @@ func TestSaveValidatesType(t *testing.T) {
 	for name, mutate := range cases {
 		in := defaultInput()
 		mutate(&in)
-		if _, err := f.svc.Save(ctx, billing, in); err == nil {
-			t.Errorf("%s: Save succeeded", name)
+		if _, err := f.svc.Save(ctx, billing, in); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Save error = %v, want ErrInvalid", name, err)
 		}
 	}
 	entries, _ := os.ReadDir(filepath.Join(f.svc.WikiRoot, billing.Dir))
@@ -191,6 +191,24 @@ func TestSaveValidatesType(t *testing.T) {
 		if _, err := f.svc.Save(ctx, billing, in); err != nil {
 			t.Errorf("type %q rejected: %v", typ, err)
 		}
+	}
+}
+
+func TestUpdateValidationWrapsErrInvalid(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	m, err := f.svc.Save(ctx, billing, defaultInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad, blank := "Not Valid", " "
+	for name, patch := range map[string]Patch{"type": {Type: &bad}, "title": {Title: &blank}, "summary": {Summary: &blank}} {
+		if _, err := f.svc.Update(ctx, m.ID, patch); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Update error = %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, err := f.svc.Update(ctx, "m-ffffffffffff", Patch{Title: &bad}); errors.Is(err, ErrInvalid) {
+		t.Errorf("unknown id error %v wraps ErrInvalid", err)
 	}
 }
 

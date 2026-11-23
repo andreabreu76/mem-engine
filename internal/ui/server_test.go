@@ -183,9 +183,6 @@ func TestRejectsMissingToken(t *testing.T) {
 	if w := f.serve(r); w.Code != http.StatusOK {
 		t.Errorf("token query param = %d, want 200", w.Code)
 	}
-	if strings.Contains(f.log.String(), f.srv.Token) {
-		t.Errorf("log contains the token: %s", f.log.String())
-	}
 }
 
 func TestEmptyServerTokenRejectsEverything(t *testing.T) {
@@ -234,6 +231,11 @@ func TestRejectsCrossOriginWrite(t *testing.T) {
 	r.Header.Set("Content-Type", "text/plain")
 	if w := f.serve(r); w.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("PUT text/plain = %d, want 415", w.Code)
+	}
+	r = f.request("PROPFIND", target, "")
+	r.Header.Del("Origin")
+	if w := f.serve(r); w.Code != http.StatusForbidden {
+		t.Fatalf("PROPFIND without Origin = %d, want 403", w.Code)
 	}
 	m, err := f.srv.Store.GetMemory(context.Background(), id)
 	if err != nil || m.Title != "keep me" {
@@ -438,11 +440,35 @@ func TestInternalErrorIsGeneric(t *testing.T) {
 	if err := f.srv.Store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	w := f.do(t, http.MethodGet, "/api/projects", "", http.StatusInternalServerError)
+	r := f.request(http.MethodGet, "/api/projects?token="+f.srv.Token, "")
+	r.Header.Del("X-Mem-Token")
+	w := f.serve(r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("closed store = %d, want 500", w.Code)
+	}
 	if got := decode[errorJSON](t, w); got.Error != "internal error" {
 		t.Fatalf("500 body = %+v", got)
 	}
 	if !strings.Contains(f.log.String(), "list projects") {
 		t.Fatalf("log = %q, want the full error", f.log.String())
 	}
+	if strings.Contains(f.log.String(), f.srv.Token) {
+		t.Fatalf("log contains the token: %q", f.log.String())
+	}
+}
+
+func TestStarIsTheSameSnapshotEverywhere(t *testing.T) {
+	f := newFixture(t)
+	known := f.observe(t, "s1", billing.Key, "known", "one", testNow.Add(-2*time.Hour))
+	user := f.observe(t, "s2", "user", "user wide", "two", testNow.Add(-1*time.Hour))
+	orphan := f.observe(t, "s3", "/home/dev/src/unregistered", "orphan", "three", testNow)
+
+	feed := decode[[]hitJSON](t, f.do(t, http.MethodGet, "/api/feed?project=*", "", http.StatusOK))
+	if got, want := ids(feed), []string{known, user}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("feed * = %v, want %v", got, want)
+	}
+	for _, id := range ids(feed) {
+		f.do(t, http.MethodGet, "/api/item/"+id+"?project=*", "", http.StatusOK)
+	}
+	f.do(t, http.MethodGet, "/api/item/"+orphan+"?project=*", "", http.StatusNotFound)
 }

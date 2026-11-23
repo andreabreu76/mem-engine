@@ -12,10 +12,23 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
-const ext = ".jsonl"
+const (
+	ext         = ".jsonl"
+	drainingTag = ".draining-"
+	tmpPrefix   = ".spool-"
+	tmpSuffix   = ".tmp"
+	orphanAge   = time.Minute
+)
+
+var (
+	drainMu   sync.Mutex
+	lastStamp atomic.Int64
+)
 
 func Append(dir string, v any) error {
 	line, err := json.Marshal(v)
@@ -32,11 +45,17 @@ func Append(dir string, v any) error {
 }
 
 func Drain(dir string, apply func(json.RawMessage) error) (applied int, err error) {
-	names, err := pendingFiles(dir)
+	drainMu.Lock()
+	defer drainMu.Unlock()
+	names, err := listFiles(dir)
 	if err != nil {
 		return 0, fmt.Errorf("spool drain: %w", err)
 	}
+	own := drainingTag + strconv.Itoa(os.Getpid())
 	for _, name := range names {
+		if strings.HasSuffix(name, own) {
+			continue
+		}
 		n, err := drainFile(dir, name, apply)
 		applied += n
 		if err != nil {
@@ -47,7 +66,7 @@ func Drain(dir string, apply func(json.RawMessage) error) (applied int, err erro
 }
 
 func Pending(dir string) (lines int, err error) {
-	names, err := pendingFiles(dir)
+	names, err := listFiles(dir)
 	if err != nil {
 		return 0, fmt.Errorf("spool pending: %w", err)
 	}
@@ -65,8 +84,18 @@ func Pending(dir string) (lines int, err error) {
 }
 
 func drainFile(dir, name string, apply func(json.RawMessage) error) (int, error) {
-	claimed := filepath.Join(dir, strings.TrimSuffix(name, ext)+".draining-"+strconv.Itoa(os.Getpid()))
-	if err := os.Rename(filepath.Join(dir, name), claimed); err != nil {
+	src := filepath.Join(dir, name)
+	claimed := filepath.Join(dir, claimName(name))
+	if _, err := os.Lstat(claimed); err == nil {
+		return 0, nil
+	}
+	if err := touch(src); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("spool drain: claim %s: %w", name, err)
+	}
+	if err := os.Rename(src, claimed); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return 0, nil
 		}
@@ -78,8 +107,15 @@ func drainFile(dir, name string, apply func(json.RawMessage) error) (int, error)
 	}
 	lines := splitLines(data)
 	for i, line := range lines {
+		if err := touch(claimed); err != nil {
+			return i, fmt.Errorf("spool drain: keep claim on %s: %w", name, err)
+		}
 		if applyErr := apply(json.RawMessage(line)); applyErr != nil {
-			if err := publish(dir, name, joinLines(lines[i:])); err != nil {
+			preferred := ""
+			if strings.HasSuffix(name, ext) {
+				preferred = name
+			}
+			if err := publish(dir, preferred, joinLines(lines[i:])); err != nil {
 				return i, fmt.Errorf("spool drain: keep remaining lines of %s in %s: %w (apply: %w)", name, claimed, err, applyErr)
 			}
 			if err := os.Remove(claimed); err != nil {
@@ -94,37 +130,61 @@ func drainFile(dir, name string, apply func(json.RawMessage) error) (int, error)
 	return len(lines), nil
 }
 
+func claimName(name string) string {
+	base, _, found := strings.Cut(name, drainingTag)
+	if !found {
+		base = strings.TrimSuffix(strings.TrimSuffix(name, ext), tmpSuffix)
+	}
+	return base + drainingTag + strconv.Itoa(os.Getpid())
+}
+
+func touch(path string) error {
+	now := time.Now()
+	return os.Chtimes(path, now, now)
+}
+
 func publish(dir, preferred string, data []byte) error {
-	tmp, err := os.CreateTemp(dir, ".spool-*.tmp")
+	tmp, err := os.CreateTemp(dir, tmpPrefix+"*"+tmpSuffix)
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
+		os.Remove(tmpPath)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 	name := preferred
+	if name == "" || exists(filepath.Join(dir, name)) {
+		name = fmt.Sprintf("%d-%d%s", os.Getpid(), nextStamp(), ext)
+	}
+	if err := os.Rename(tmpPath, filepath.Join(dir, name)); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return !errors.Is(err, fs.ErrNotExist)
+}
+
+func nextStamp() int64 {
 	for {
-		if name == "" {
-			name = fmt.Sprintf("%d-%d%s", os.Getpid(), time.Now().UnixNano(), ext)
+		last := lastStamp.Load()
+		next := max(time.Now().UnixNano(), last+1)
+		if lastStamp.CompareAndSwap(last, next) {
+			return next
 		}
-		err := os.Link(tmpPath, filepath.Join(dir, name))
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, fs.ErrExist) {
-			return err
-		}
-		name = ""
 	}
 }
 
-func pendingFiles(dir string) ([]string, error) {
+func listFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -132,10 +192,29 @@ func pendingFiles(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	cutoff := time.Now().Add(-orphanAge)
 	var names []string
 	for _, e := range entries {
-		if e.Type().IsRegular() && strings.HasSuffix(e.Name(), ext) {
-			names = append(names, e.Name())
+		name := e.Name()
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if strings.HasSuffix(name, ext) {
+			names = append(names, name)
+			continue
+		}
+		if !strings.Contains(name, drainingTag) && !(strings.HasPrefix(name, tmpPrefix) && strings.HasSuffix(name, tmpSuffix)) {
+			continue
+		}
+		info, err := e.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if info.ModTime().Before(cutoff) {
+			names = append(names, name)
 		}
 	}
 	slices.SortFunc(names, func(a, b string) int {
@@ -148,7 +227,8 @@ func pendingFiles(dir string) ([]string, error) {
 }
 
 func stamp(name string) int64 {
-	_, nano, _ := strings.Cut(strings.TrimSuffix(name, ext), "-")
+	base, _, _ := strings.Cut(name, ".")
+	_, nano, _ := strings.Cut(base, "-")
 	n, _ := strconv.ParseInt(nano, 10, 64)
 	return n
 }

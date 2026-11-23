@@ -1,10 +1,10 @@
 # DECISIONS
 
-## 23/11/2026, spool publica cada arquivo por temporário e `os.Link`
+## 23/11/2026, spool publica por temporário e `os.Rename`, com recuperação de órfãos
 
-- Decisão: `spool.Append` grava a linha em `.spool-*.tmp` e publica com `os.Link` para `<pid>-<unixnano>.jsonl`, repetindo com novo nome se já existir; o `Drain` só enxerga `*.jsonl`
-- Por quê: com `O_APPEND|O_CREATE` direto no nome final, um `Drain` de outro processo pode renomear o arquivo entre a criação e a escrita, ler vazio e apagar, perdendo a linha; o `Link` também não sobrescreve um nome repetido no mesmo nanossegundo (relógio do macOS tem resolução de microssegundos)
-- Alternativa rejeitada: `os.Rename` do temporário, que sobrescreve silenciosamente um `.jsonl` de mesmo nome; `flock`, que não é portátil sem cgo
+- Decisão: `spool.Append` grava em `.spool-*.tmp` e renomeia para `<pid>-<unixnano>.jsonl`, com `unixnano` estritamente crescente dentro do processo; `Drain` reivindica por `rename` para `.draining-<pid>`, atualiza o mtime ao reivindicar e a cada linha, e recupera `.draining-*` e `.spool-*.tmp` com mais de 1 minuto; um mutex serializa `Drain` dentro do processo
+- Por quê: com `O_APPEND|O_CREATE` direto no nome final, um `Drain` de outro processo pode renomear o arquivo entre a criação e a escrita, ler vazio e apagar, perdendo a linha. Com `os.Link`, um `Append` morto entre o link e a remoção do temporário deixaria o mesmo conteúdo em dois nomes, e a recuperação de órfãos aplicaria a linha duas vezes. O `rename` mantém um único nome por conteúdo; o mtime renovado impede que um dreno vivo seja tomado como órfão (o `rename` preserva o mtime de quando a linha foi gravada)
+- Alternativa rejeitada: `os.Link` (duplicidade descrita acima); `flock`, que não é portátil sem cgo; `RENAME_NOREPLACE`, que depende de syscall por plataforma
 
 ## 23/11/2026, raiz do git detectada em Go puro, sem chamar o binário `git`
 

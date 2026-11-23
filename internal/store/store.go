@@ -24,7 +24,8 @@ type Options struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
+	now func() time.Time
 }
 
 func Open(path string) (*Store, error) {

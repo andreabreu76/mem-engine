@@ -311,12 +311,94 @@ func TestCommitIgnoresUserHooks(t *testing.T) {
 	}
 }
 
-func TestCommitErrorCarriesStderr(t *testing.T) {
+func TestCommitNoChangeIsNoop(t *testing.T) {
 	needGit(t)
 	r := newRepo(t)
-	err := r.Commit("nothing", "missing.md")
-	if err == nil || !strings.Contains(err.Error(), "missing.md") {
-		t.Fatalf("err = %v, want git stderr mentioning missing.md", err)
+	if err := r.Write("a.md", []byte("igual")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit("save a", "a.md"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := r.Write("a.md", []byte("igual")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit("save a again", "a.md"); err != nil {
+		t.Fatalf("Commit without change = %v, want nil", err)
+	}
+	if log := lines(gitOut(t, r.Dir, "log", "--oneline")); len(log) != 1 {
+		t.Fatalf("log = %q, want 1 commit", log)
+	}
+}
+
+func TestRemoveUncommittedIsNoop(t *testing.T) {
+	needGit(t)
+	r := newRepo(t)
+	if err := r.Write("keep.md", []byte("k")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit("save keep", "keep.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Write("draft.md", []byte("d")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Remove("draft.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit("forget draft", "draft.md"); err != nil {
+		t.Fatalf("Commit of never-committed removal = %v, want nil", err)
+	}
+	if log := lines(gitOut(t, r.Dir, "log", "--oneline")); len(log) != 1 {
+		t.Fatalf("log = %q, want 1 commit", log)
+	}
+}
+
+func TestCommitFailureCarriesGitOutput(t *testing.T) {
+	needGit(t)
+	home := isolate(t)
+	outer := filepath.Join(home, "outer")
+	if err := os.MkdirAll(outer, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, outer, "init", "--quiet")
+	r, err := OpenRepo(filepath.Join(outer, "wiki"), "billing-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Write("a.md", []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit("save a", "a.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.Dir, ".git", "HEAD"), []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Write("a.md", []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	err = r.Commit("save a", "a.md")
+	if err == nil || !strings.Contains(err.Error(), "fatal:") {
+		t.Fatalf("err = %v, want git output with fatal:", err)
+	}
+	if staged := gitOut(t, outer, "status", "--porcelain", "--untracked-files=no"); staged != "" {
+		t.Fatalf("outer repo touched: %q", staged)
+	}
+}
+
+func TestGitErrorIncludesStdout(t *testing.T) {
+	needGit(t)
+	r := newRepo(t)
+	if err := r.Write("a.md", []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit("save a", "a.md"); err != nil {
+		t.Fatal(err)
+	}
+	err := r.git("commit", "-m", "empty")
+	if err == nil || !strings.Contains(err.Error(), "to commit") {
+		t.Fatalf("err = %v, want git stdout explaining there is nothing to commit", err)
 	}
 }
 

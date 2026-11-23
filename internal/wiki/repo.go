@@ -112,7 +112,15 @@ func (r *Repo) Commit(msg string, paths ...string) error {
 	if err := r.ensureGit(); err != nil {
 		return err
 	}
-	if err := r.git(append([]string{"add", "--all", "--"}, paths...)...); err != nil {
+	stage, err := r.stageable(paths)
+	if err != nil || len(stage) == 0 {
+		return err
+	}
+	if err := r.git(append([]string{"add", "--all", "--"}, stage...)...); err != nil {
+		return err
+	}
+	changed, err := r.stagedChanges(stage)
+	if err != nil || !changed {
 		return err
 	}
 	args := []string{
@@ -121,7 +129,38 @@ func (r *Repo) Commit(msg string, paths ...string) error {
 		"-c", "commit.gpgsign=false",
 		"commit", "--quiet", "--no-verify", "-m", msg, "--",
 	}
-	return r.git(append(args, paths...)...)
+	return r.git(append(args, stage...)...)
+}
+
+func (r *Repo) stagedChanges(paths []string) (bool, error) {
+	_, err := r.run(append([]string{"diff", "--cached", "--quiet", "--"}, paths...)...)
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return true, nil
+	default:
+		return false, err
+	}
+}
+
+func (r *Repo) stageable(paths []string) ([]string, error) {
+	out, err := r.run(append([]string{"ls-files", "-z", "--"}, paths...)...)
+	if err != nil {
+		return nil, err
+	}
+	tracked := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\x00") {
+		tracked[p] = true
+	}
+	var stage []string
+	for _, p := range paths {
+		if _, err := os.Lstat(filepath.Join(r.Dir, p)); err == nil || tracked[p] {
+			stage = append(stage, p)
+		}
+	}
+	return stage, nil
 }
 
 func (r *Repo) List() ([]string, error) {
@@ -161,15 +200,22 @@ func (r *Repo) hooksPath() string {
 }
 
 func (r *Repo) git(args ...string) error {
+	_, err := r.run(args...)
+	return err
+}
+
+func (r *Repo) run(args ...string) ([]byte, error) {
 	full := append([]string{"-C", r.Dir, "--literal-pathspecs", "-c", "core.hooksPath=" + r.hooksPath()}, args...)
 	cmd := exec.Command("git", full...)
-	cmd.Env = gitEnv()
-	var stderr bytes.Buffer
+	cmd.Env = append(gitEnv(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(r.Dir))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("wiki: git %s: %w: %s", subcommand(args), err, strings.TrimSpace(stderr.String()))
+		output := strings.TrimSpace(strings.TrimSpace(stdout.String()) + "\n" + strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("wiki: git %s: %w: %s", subcommand(args), err, output)
 	}
-	return nil
+	return stdout.Bytes(), nil
 }
 
 func subcommand(args []string) string {
@@ -188,7 +234,7 @@ func gitEnv() []string {
 	for _, kv := range os.Environ() {
 		key, _, _ := strings.Cut(kv, "=")
 		switch key {
-		case "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR", "GIT_NAMESPACE":
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR", "GIT_NAMESPACE":
 			continue
 		}
 		env = append(env, kv)

@@ -4,6 +4,16 @@ A single-binary, local long-term memory for Claude Code that captures session ob
 
 ## Status: under development
 
+## Why
+
+Claude Code's native memory loads the whole `MEMORY.md` index into every session, and memory tools that summarize each event with an LLM spend tokens on every tool call. mem-engine captures without an LLM, opens each session with a handoff of about 300 tokens, and lets the agent fetch the rest through layered search (`search`, then `timeline`, then `get`). Memory stays local, isolated per project, and editable as Markdown in git or in a local viewer. It builds on ideas from [claude-mem](https://github.com/thedotmack/claude-mem) and [ai-memory](https://github.com/akitaonrails/ai-memory).
+
+## Documentation
+
+- [Why mem-engine](docs/why.md): the problems it solves, the projects it builds on, goals and non-goals
+- [How it works](docs/how-it-works.md): architecture, capture, handoff, layered search, curated memory, viewer and concurrency, with flow diagrams
+- [How it was built](docs/how-it-was-built.md): design, plan, test-driven implementation, reviews and CI
+
 ## Install
 
 The hooks call `mem` by name, so whichever way you install it, the binary must be on your `PATH`. To use it as a Claude Code plugin, install the binary first and then see [Install as a Claude Code plugin](#install-as-a-claude-code-plugin).
@@ -242,7 +252,7 @@ The builtin list does not cover `Authorization: Bearer` headers or `.env` style 
 ```toml
 redact_extra = [
   '(?i)authorization:\s*bearer\s+(?P<secret>[A-Za-z0-9._~+/=-]+)',
-  '(?m)^\s*\w*(?:PASSWORD|SECRET)\w*\s*=\s*(?P<secret>\S+)',
+  '(?i)\b\w*(?:PASSWORD|SECRET)\w*\s*[=:]\s*(?P<secret>[^\s"\\]+)',
 ]
 ```
 

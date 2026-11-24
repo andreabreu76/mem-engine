@@ -1,8 +1,14 @@
 # DECISIONS
 
+## 24/11/2026, `Forget` não segue a memória para outro projeto
+
+- Decisão: se o projeto da memória muda enquanto o `Forget` espera o lock, ele devolve `store.ErrNotFound` sem apagar nada; o MCP responde not found e a UI responde 404
+- Por quê: o escopo é conferido pelo chamador antes do `Forget`; seguir a memória até o destino de um `MoveProject` concorrente apagaria uma memória fora do escopo autorizado
+- Alternativa rejeitada: passar o escopo para dentro do `Forget` e reconferir a cada tentativa (mais superfície para um caso raro, e o chamador pode repetir a operação)
+
 ## 23/11/2026, lock global na raiz do wiki entre `Reindex` e quem cria diretório de projeto
 
-- Decisão: `wiki.LockRoot` é um flock na raiz do wiki. `Reindex` pega em modo exclusivo antes de enumerar os diretórios; `Save` e `MoveProject` pegam em modo compartilhado antes de abrir o repositório do projeto e seguram até atualizar o índice. A ordem é sempre global e depois local; `Update` e `Forget` usam só o lock do diretório. `Forget` relê a memória depois do lock e, se o caminho ou o projeto mudaram por uma movimentação concorrente, solta o lock e tenta de novo, até 3 vezes
+- Decisão: `wiki.LockRoot` é um flock na raiz do wiki. `Reindex` pega em modo exclusivo antes de enumerar os diretórios; `Save` e `MoveProject` pegam em modo compartilhado antes de abrir o repositório do projeto e seguram até atualizar o índice. A ordem é sempre global e depois local; `Update` e `Forget` usam só o lock do diretório. `Forget` relê a memória depois do lock; se o projeto mudou por uma movimentação concorrente, devolve not found, e se só o caminho mudou, solta o lock e tenta de novo, até 3 vezes
 - Por quê: um `Save` que cria um projeto novo depois do `ReadDir` do `Reindex` terminava fora do índice, e um `Forget` concorrente com `MoveProject` apagava o índice e deixava o arquivo no destino, que voltava no próximo reindex
 - Alternativa rejeitada: só locks por diretório com nova enumeração no fim do `Reindex` (a janela continua aberta entre a enumeração e o `ReplaceAllMemories`)
 

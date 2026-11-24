@@ -1,5 +1,19 @@
 # GOTCHAS
 
+## 24/11/2026, testes que trocam `HOME` não isolam o home no Windows
+
+- Sintoma: no CI do Windows, config, bench e import leem `C:\Users\runneradmin` em vez do diretório temporário do teste
+- Causa: `os.UserHomeDir` no Windows lê `USERPROFILE`, não `HOME`
+- Como lidar: todo `t.Setenv("HOME", x)` vem junto de `t.Setenv("USERPROFILE", x)`; o `.gitattributes` com `eol=lf` evita a outra metade das falhas (golden e frontmatter com CRLF no checkout)
+- Onde: `internal/config/config_test.go:56`
+
+## 24/11/2026, concorrência entre processos só quebra no Windows
+
+- Sintoma: no Windows, drains simultâneos do spool falham com "cannot find the file" ou "being used by another process", e escritores do SQLite recebem `SQLITE_BUSY` depois do busy timeout; macOS e Linux passam
+- Causa: no Windows, rename e leitura disputam o mesmo arquivo (compartilhamento de arquivos) e o fsync por commit é lento, o que alonga o lock de escrita
+- Como lidar: o drain pega um flock exclusivo ao lado da pasta do spool e pula se outro processo já drena; a abertura do banco lê a versão do schema sem lock de escrita; o WAL roda com `synchronous(NORMAL)`. Só o CI do Windows reproduz, `GOOS=windows go vet` não pega
+- Onde: `internal/spool/spool.go:58`, `internal/store/store.go:68`
+
 ## 23/11/2026, `json.Compact` mantém escapes `\uXXXX` e a redação textual não enxerga `<private>`
 
 - Sintoma: `tool_input` com `"\u003cprivate\u003esegredo\u003c/private\u003e"` ou um token com escape no meio é gravado em claro no corpo da observação, embora o título saia redigido

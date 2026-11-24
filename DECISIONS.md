@@ -1,5 +1,11 @@
 # DECISIONS
 
+## 24/11/2026, drain do spool exclusivo entre processos e WAL com `synchronous(NORMAL)`
+
+- Decisão: `spool.Drain` pega um flock não bloqueante em `<spool>.drain.lock`; sem o lock, devolve 0 e deixa o drain para quem o tem. A reivindicação por rename continua para recuperar arquivo de processo que caiu. O SQLite roda com `synchronous(NORMAL)` no WAL
+- Por quê: no Windows a reivindicação por rename sozinha falha com dois drains ao mesmo tempo, e o fsync por commit segura o lock de escrita além do busy timeout com vários hooks gravando
+- Alternativa rejeitada: repetir leitura e rename em erro de compartilhamento do Windows (trata o sintoma e deixa a corrida); aumentar o busy timeout (alonga a espera do hook sem reduzir o tempo de lock). O custo do `NORMAL` é perder o último commit numa queda de energia, sem corromper o banco
+
 ## 24/11/2026, `Forget` não segue a memória para outro projeto
 
 - Decisão: se o projeto da memória muda enquanto o `Forget` espera o lock, ele devolve `store.ErrNotFound` sem apagar nada; o MCP responde not found e a UI responde 404

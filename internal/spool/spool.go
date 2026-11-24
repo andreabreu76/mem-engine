@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 const (
@@ -23,7 +25,6 @@ const (
 	tmpPrefix   = ".spool-"
 	tmpSuffix   = ".tmp"
 	orphanAge   = time.Minute
-	drainLock   = ".drain.lock"
 )
 
 var (
@@ -50,6 +51,18 @@ func Append(dir string, v any) error {
 func Drain(dir string, apply func(json.RawMessage) error) (applied int, err error) {
 	drainMu.Lock()
 	defer drainMu.Unlock()
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	lock := flock.New(drainLockPath(dir), flock.SetPermissions(0o600))
+	locked, err := lock.TryLock()
+	if err != nil {
+		return 0, fmt.Errorf("spool drain: lock: %w", err)
+	}
+	if !locked {
+		return 0, nil
+	}
+	defer lock.Unlock()
 	names, err := listFiles(dir)
 	if err != nil {
 		return 0, fmt.Errorf("spool drain: %w", err)
@@ -244,4 +257,8 @@ func splitLines(data []byte) [][]byte {
 
 func joinLines(lines [][]byte) []byte {
 	return append(bytes.Join(lines, []byte("\n")), '\n')
+}
+
+func drainLockPath(dir string) string {
+	return filepath.Clean(dir) + ".drain.lock"
 }

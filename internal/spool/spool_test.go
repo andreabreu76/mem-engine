@@ -487,7 +487,7 @@ func TestDrainSkipsWhileAnotherProcessDrains(t *testing.T) {
 	if err := Append(dir, entry{N: 1}); err != nil {
 		t.Fatal(err)
 	}
-	held := flock.New(filepath.Join(dir, drainLock))
+	held := flock.New(drainLockPath(dir))
 	if ok, err := held.TryLock(); err != nil || !ok {
 		t.Fatalf("TryLock = %v, %v", ok, err)
 	}

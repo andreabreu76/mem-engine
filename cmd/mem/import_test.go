@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -177,6 +178,9 @@ func TestImportCommandFatal(t *testing.T) {
 }
 
 func TestImportCommandFatalPrintsPartialReport(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block writes on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}

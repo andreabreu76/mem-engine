@@ -16,7 +16,9 @@ func requireGit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not in PATH")
 	}
-	t.Setenv("HOME", t.TempDir())
+	userProfile := t.TempDir()
+	t.Setenv("HOME", userProfile)
+	t.Setenv("USERPROFILE", userProfile)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 }
 

@@ -19,7 +19,9 @@ var billing = project.Project{Key: "/home/dev/src/github.com/acme/billing-api", 
 
 func setEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	userProfile := t.TempDir()
+	t.Setenv("HOME", userProfile)
+	t.Setenv("USERPROFILE", userProfile)
 	t.Setenv("MEM_ENGINE_HOME", t.TempDir())
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 }

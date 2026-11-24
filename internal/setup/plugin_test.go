@@ -13,7 +13,9 @@ var pluginDir = filepath.Join("..", "..", "plugins", "mem-engine")
 
 func isolateEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	userProfile := t.TempDir()
+	t.Setenv("HOME", userProfile)
+	t.Setenv("USERPROFILE", userProfile)
 	t.Setenv("MEM_ENGINE_HOME", t.TempDir())
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 }

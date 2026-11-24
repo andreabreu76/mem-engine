@@ -19,6 +19,7 @@ func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("MEM_ENGINE_HOME", filepath.Join(home, ".mem-engine"))
 	gitConfig := filepath.Join(home, "gitconfig")
 	if err := os.WriteFile(gitConfig, nil, 0o600); err != nil {
@@ -396,7 +397,7 @@ func TestGitErrorIncludesStdout(t *testing.T) {
 	if err := r.Commit("save a", "a.md"); err != nil {
 		t.Fatal(err)
 	}
-	err := r.git("commit", "-m", "empty")
+	err := r.git("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "empty")
 	if err == nil || !strings.Contains(err.Error(), "to commit") {
 		t.Fatalf("err = %v, want git stdout explaining there is nothing to commit", err)
 	}

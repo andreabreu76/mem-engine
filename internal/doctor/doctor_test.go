@@ -24,6 +24,7 @@ func newEnv(t *testing.T) Env {
 	userHome := t.TempDir()
 	dataHome := t.TempDir()
 	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	t.Setenv("MEM_ENGINE_HOME", dataHome)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 	cfg, err := config.LoadFrom(dataHome)

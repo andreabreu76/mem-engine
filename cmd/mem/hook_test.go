@@ -18,7 +18,9 @@ import (
 
 func setHome(t *testing.T) string {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	userProfile := t.TempDir()
+	t.Setenv("HOME", userProfile)
+	t.Setenv("USERPROFILE", userProfile)
 	home := t.TempDir()
 	t.Setenv("MEM_ENGINE_HOME", home)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))

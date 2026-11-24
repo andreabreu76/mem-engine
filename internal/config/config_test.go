@@ -54,6 +54,7 @@ func TestLoadDefaultsWhenFileMissing(t *testing.T) {
 func TestLoadGroupsAndOverrides(t *testing.T) {
 	userHome := t.TempDir()
 	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	home := t.TempDir()
 	writeConfig(t, home, `retention_days = 30
 
@@ -115,6 +116,7 @@ func TestLoadUsesEnvHome(t *testing.T) {
 func TestLoadDefaultsToUserHome(t *testing.T) {
 	userHome := t.TempDir()
 	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	t.Setenv("MEM_ENGINE_HOME", "")
 	c, err := Load()
 	if err != nil {
@@ -128,6 +130,7 @@ func TestLoadDefaultsToUserHome(t *testing.T) {
 func TestExpandHome(t *testing.T) {
 	userHome := t.TempDir()
 	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	cases := map[string]string{
 		"~":             userHome,
 		"~/":            userHome,

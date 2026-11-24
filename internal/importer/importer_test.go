@@ -40,6 +40,7 @@ func newEnv(t *testing.T) env {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	dataDir := filepath.Join(home, ".mem-engine")
 	t.Setenv("MEM_ENGINE_HOME", dataDir)
 	gitConfig := filepath.Join(home, "gitconfig")

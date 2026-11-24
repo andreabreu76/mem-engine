@@ -41,7 +41,9 @@ func newFixture(t *testing.T) fixture {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
-	t.Setenv("HOME", t.TempDir())
+	userProfile := t.TempDir()
+	t.Setenv("HOME", userProfile)
+	t.Setenv("USERPROFILE", userProfile)
 	home := t.TempDir()
 	t.Setenv("MEM_ENGINE_HOME", home)
 	gitConfig := filepath.Join(t.TempDir(), "gitconfig")

@@ -15,7 +15,9 @@ var gcNow = time.Unix(1700000000, 0)
 
 func openGCTemp(t *testing.T) *Store {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	userProfile := t.TempDir()
+	t.Setenv("HOME", userProfile)
+	t.Setenv("USERPROFILE", userProfile)
 	t.Setenv("MEM_ENGINE_HOME", t.TempDir())
 	s, _ := openTemp(t)
 	return s

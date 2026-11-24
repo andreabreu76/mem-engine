@@ -204,7 +204,7 @@ func listFiles(dir string) ([]string, error) {
 		if !strings.Contains(name, drainingTag) && !(strings.HasPrefix(name, tmpPrefix) && strings.HasSuffix(name, tmpSuffix)) {
 			continue
 		}
-		info, err := e.Info()
+		info, err := os.Lstat(filepath.Join(dir, name))
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}

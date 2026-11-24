@@ -1,0 +1,22 @@
+{
+  "name": "mem-engine",
+  "description": "Marketplace for the mem-engine Claude Code plugin.",
+  "owner": {
+    "name": "mem-engine contributors"
+  },
+  "plugins": [
+    {
+      "name": "mem-engine",
+      "source": "./plugins/mem-engine",
+      "description": "Local long-term memory for Claude Code: capture hooks and the mem-engine MCP server, backed by the mem binary on PATH.",
+      "version": "0.1.0",
+      "author": {
+        "name": "mem-engine contributors"
+      },
+      "homepage": "https://github.com/andreabreu76/mem-engine",
+      "repository": "https://github.com/andreabreu76/mem-engine",
+      "license": "MIT",
+      "keywords": ["memory", "mcp", "hooks", "sqlite"]
+    }
+  ]
+}

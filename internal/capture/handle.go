@@ -1,0 +1,286 @@
+package capture
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/andreabreu76/mem-engine/internal/config"
+	"github.com/andreabreu76/mem-engine/internal/handoff"
+	"github.com/andreabreu76/mem-engine/internal/project"
+	"github.com/andreabreu76/mem-engine/internal/redact"
+	"github.com/andreabreu76/mem-engine/internal/spool"
+	"github.com/andreabreu76/mem-engine/internal/store"
+)
+
+const (
+	maxPayloadBytes     = 32 << 20
+	sessionEndTimeout   = 1500 * time.Millisecond
+	sessionEndBusyWait  = 500 * time.Millisecond
+	sessionStartTimeout = 5 * time.Second
+	spoolEvent          = "spool"
+)
+
+type Deps struct {
+	Cfg                 config.Config
+	Log                 *slog.Logger
+	Now                 func() time.Time
+	StoreOptions        store.Options
+	SessionStartOutput  func(ctx context.Context, st *store.Store, op Op, p Payload) string
+	SessionStartTimeout time.Duration
+}
+
+type handler struct {
+	event   string
+	d       Deps
+	log     *slog.Logger
+	now     func() time.Time
+	opts    store.Options
+	st      *store.Store
+	openErr error
+	opened  bool
+}
+
+func Handle(ctx context.Context, event string, stdin io.Reader, stdout io.Writer, d Deps) error {
+	h := &handler{event: event, d: d, log: d.Log, now: d.Now, opts: d.StoreOptions}
+	if h.log == nil {
+		h.log = slog.New(slog.DiscardHandler)
+	}
+	if h.now == nil {
+		h.now = time.Now
+	}
+	if event == eventSessionEnd {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, sessionEndTimeout)
+		defer cancel()
+		if h.opts.BusyTimeout <= 0 || h.opts.BusyTimeout > sessionEndBusyWait {
+			h.opts.BusyTimeout = sessionEndBusyWait
+		}
+	}
+	if event == eventSessionStart {
+		timeout := d.SessionStartTimeout
+		if timeout <= 0 {
+			timeout = sessionStartTimeout
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	return h.run(ctx, stdin, stdout)
+}
+
+func (h *handler) run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+	op, p, r, keep, err := h.prepare(ctx, stdin)
+	if err == nil && keep && h.event == eventSessionStart {
+		return h.startSession(ctx, op, p, r, stdout)
+	}
+	defer h.close()
+	if err != nil || !keep {
+		return err
+	}
+	_, _, err = h.persist(ctx, op, p, r)
+	return err
+}
+
+func (h *handler) prepare(ctx context.Context, stdin io.Reader) (Op, Payload, *redact.Redactor, bool, error) {
+	data, err := io.ReadAll(io.LimitReader(stdin, maxPayloadBytes))
+	if err != nil {
+		return Op{}, Payload{}, nil, false, h.fail(ctx, "", "read hook payload failed")
+	}
+	var p Payload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return Op{}, p, nil, false, h.fail(ctx, "", "hook payload is not valid JSON")
+	}
+	r, err := redact.New(h.d.Cfg.RedactExtra, h.d.Cfg.RedactDisableBuiltin)
+	if err != nil {
+		return Op{}, p, nil, false, h.fail(ctx, p.SessionID, "invalid redact_extra pattern in config.toml")
+	}
+	proj, err := project.Resolve(p.Cwd, h.d.Cfg)
+	if err != nil {
+		return Op{}, p, nil, false, h.fail(ctx, p.SessionID, "resolve project from cwd failed")
+	}
+	op, keep, err := Build(h.event, p, proj, h.d.Cfg, r, h.now())
+	if err != nil {
+		return Op{}, p, nil, false, h.fail(ctx, p.SessionID, "unsupported hook event")
+	}
+	return op, p, r, keep, nil
+}
+
+func (h *handler) persist(ctx context.Context, op Op, p Payload, r *redact.Redactor) (*store.Store, bool, error) {
+	st, err := h.store()
+	if err != nil {
+		h.log.Warn("store unavailable, event spooled", "event", h.event, "session_id", p.SessionID, "error", err.Error())
+		return nil, false, h.spool(ctx, op)
+	}
+	if err := h.capture(ctx, st, r, op); err != nil {
+		h.log.Warn("store write failed, event spooled", "event", h.event, "session_id", p.SessionID, "error", err.Error())
+		return st, false, h.spool(ctx, op)
+	}
+	return st, true, nil
+}
+
+type startResult struct {
+	text string
+	err  error
+}
+
+func (h *handler) startSession(ctx context.Context, op Op, p Payload, r *redact.Redactor, stdout io.Writer) error {
+	done := make(chan startResult, 1)
+	go func() {
+		var res startResult
+		defer func() {
+			if v := recover(); v != nil {
+				res = startResult{text: minimalHandoff(op), err: h.fail(ctx, p.SessionID, "hook panicked")}
+			}
+			h.close()
+			done <- res
+		}()
+		res = h.syncStart(ctx, op, p, r)
+	}()
+	select {
+	case res := <-done:
+		h.writeSessionStart(res.text, p, stdout)
+		return res.err
+	case <-ctx.Done():
+		h.log.Warn("session start timed out, minimal handoff written", "event", h.event, "session_id", p.SessionID)
+		h.writeSessionStart(minimalHandoff(op), p, stdout)
+		return errors.New("session start timed out")
+	}
+}
+
+func (h *handler) syncStart(ctx context.Context, op Op, p Payload, r *redact.Redactor) startResult {
+	st, written, err := h.persist(ctx, op, p, r)
+	if st == nil || err != nil {
+		return startResult{err: err}
+	}
+	if written {
+		h.gc(ctx, st, p)
+	}
+	if h.d.SessionStartOutput == nil {
+		return startResult{}
+	}
+	return startResult{text: h.d.SessionStartOutput(ctx, st, op, p)}
+}
+
+func minimalHandoff(op Op) string {
+	return handoff.Build(handoff.Input{Project: op.Project})
+}
+
+func (h *handler) capture(ctx context.Context, st *store.Store, r *redact.Redactor, op Op) error {
+	if err := h.drain(ctx, st, r); err != nil {
+		return err
+	}
+	return apply(ctx, st, op)
+}
+
+func (h *handler) gc(ctx context.Context, st *store.Store, p Payload) {
+	deleted, ran, err := st.GC(ctx, h.now(), h.d.Cfg.Retention(), false)
+	if err != nil {
+		h.log.Warn("gc failed", "event", h.event, "session_id", p.SessionID, "error", err.Error())
+		return
+	}
+	if ran {
+		h.log.Info("gc completed", "event", h.event, "session_id", p.SessionID, "deleted", deleted)
+	}
+}
+
+func (h *handler) writeSessionStart(text string, p Payload, stdout io.Writer) {
+	if text == "" {
+		return
+	}
+	out := struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}{}
+	out.HookSpecificOutput.HookEventName = eventSessionStart
+	out.HookSpecificOutput.AdditionalContext = text
+	enc := json.NewEncoder(stdout)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(out); err != nil {
+		h.log.Warn("write session start output failed", "event", h.event, "session_id", p.SessionID, "error", err.Error())
+	}
+}
+
+func (h *handler) drain(ctx context.Context, st *store.Store, r *redact.Redactor) error {
+	_, err := spool.Drain(h.d.Cfg.SpoolDir(), func(line json.RawMessage) error {
+		var op Op
+		if err := json.Unmarshal(line, &op); err != nil {
+			return h.discard(ctx, st, "", "spool line is not valid JSON, discarded")
+		}
+		if msg := validate(op); msg != "" {
+			return h.discard(ctx, st, op.Session.SessionID, msg+", discarded")
+		}
+		return apply(ctx, st, scrub(r, op))
+	})
+	return err
+}
+
+func (h *handler) discard(ctx context.Context, st *store.Store, sessionID, msg string) error {
+	h.log.Error("capture failed", "event", spoolEvent, "session_id", sessionID, "error", msg)
+	return st.RecordCaptureError(ctx, spoolEvent, msg, h.now())
+}
+
+func validate(op Op) string {
+	switch {
+	case op.Project.Key == "" || op.Session.Project == "":
+		return "spool op has no project"
+	case op.Obs != nil && !kinds[op.Obs.Kind]:
+		return "spool op has an unknown observation kind"
+	}
+	return ""
+}
+
+func apply(ctx context.Context, st *store.Store, op Op) error {
+	if err := st.EnsureProject(ctx, op.Project); err != nil {
+		return err
+	}
+	if err := st.TouchSession(ctx, op.Session); err != nil {
+		return err
+	}
+	if op.Obs == nil {
+		return nil
+	}
+	_, err := st.InsertObservation(ctx, *op.Obs)
+	return err
+}
+
+func (h *handler) spool(ctx context.Context, op Op) error {
+	if err := spool.Append(h.d.Cfg.SpoolDir(), op); err != nil {
+		return h.fail(ctx, op.Session.SessionID, "spool write failed: "+err.Error())
+	}
+	return nil
+}
+
+func (h *handler) fail(ctx context.Context, sessionID, msg string) error {
+	h.log.Error("capture failed", "event", h.event, "session_id", sessionID, "error", msg)
+	if st, err := h.store(); err == nil {
+		if err := st.RecordCaptureError(ctx, h.event, msg, h.now()); err != nil {
+			h.log.Error("record capture error failed", "event", h.event, "session_id", sessionID, "error", err.Error())
+		}
+	}
+	return errors.New(msg)
+}
+
+func (h *handler) store() (*store.Store, error) {
+	if !h.opened {
+		h.opened = true
+		if err := os.MkdirAll(h.d.Cfg.Home, 0o700); err != nil {
+			h.openErr = err
+		} else {
+			h.st, h.openErr = store.OpenWith(h.d.Cfg.DBPath(), h.opts)
+		}
+	}
+	return h.st, h.openErr
+}
+
+func (h *handler) close() {
+	if h.st != nil {
+		h.st.Close()
+	}
+}

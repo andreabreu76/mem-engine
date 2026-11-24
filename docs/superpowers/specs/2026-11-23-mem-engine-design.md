@@ -9,7 +9,7 @@ Memória de longo prazo para agentes de código (Claude Code primeiro), aberta e
 Por quê:
 - O `claude-mem` foi abandonado pelo consumo de tokens: resume cada observação com LLM e injeta muito contexto na abertura da sessão.
 - A memória nativa do Claude Code carrega o índice `MEMORY.md` inteiro em toda sessão. Em uso real, com centenas de memórias por projeto, isso dá de 12 a 18 KB por sessão, antes de qualquer pergunta.
-- O ai-memory (Akita) resolve o custo com captura sem LLM e handoff curto, mas não tem as duas coisas que mais ajudavam no `claude-mem`: a busca em camadas e o visualizador web.
+- O ai-memory resolve o custo com captura sem LLM e handoff curto, mas não tem as duas coisas que mais ajudavam no `claude-mem`: a busca em camadas e o visualizador web.
 
 Sucesso: a sessão abre com no máximo algumas centenas de tokens de memória; o agente encontra o que precisa em 2 ou 3 chamadas baratas; o usuário vê e corrige a memória num navegador.
 

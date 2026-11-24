@@ -302,3 +302,26 @@ func TestConcurrentInserts(t *testing.T) {
 		t.Errorf("rows = %d, indexed = %d, want %d", rows, indexed, workers*perWorker)
 	}
 }
+
+func TestOpenMigratedDatabaseWhileAnotherWriterHoldsTheLock(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "mem.db")
+	first, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { first.Close() })
+	tx, err := first.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM observations WHERE id = -1"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenWith(path, Options{BusyTimeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("Open while a writer holds the lock: %v", err)
+	}
+	second.Close()
+}

@@ -250,7 +250,7 @@ func TestMoveProjectFailsWhenSourceKeepsFiles(t *testing.T) {
 	}
 }
 
-func TestForgetFollowsMemoryMovedWhileWaitingForLock(t *testing.T) {
+func TestForgetRefusesMemoryMovedToAnotherProjectWhileWaitingForLock(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	m, err := f.svc.Save(ctx, billingOld, defaultInput())
@@ -293,17 +293,14 @@ func TestForgetFollowsMemoryMovedWhileWaitingForLock(t *testing.T) {
 	}
 	unlock()
 
-	if err := <-done; err != nil {
-		t.Fatalf("Forget: %v", err)
+	if err := <-done; !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Forget = %v; want ErrNotFound for a memory moved to another project", err)
 	}
-	if _, err := os.Stat(filepath.Join(dst.Dir, name)); !os.IsNotExist(err) {
-		t.Errorf("moved file survived Forget: %v", err)
+	if _, err := os.Stat(filepath.Join(dst.Dir, name)); err != nil {
+		t.Errorf("moved file removed by Forget: %v", err)
 	}
-	if _, err := f.svc.Store.GetMemory(ctx, m.ID); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("index row survived: %v", err)
-	}
-	rep, err := f.svc.Reindex(ctx)
-	if err != nil || rep.Indexed != 0 {
-		t.Errorf("Reindex after Forget = %+v, %v; want nothing indexed", rep, err)
+	got, err := f.svc.Store.GetMemory(ctx, m.ID)
+	if err != nil || got.Project != billing.Key {
+		t.Errorf("index row = %+v, %v; want it kept in %s", got, err, billing.Key)
 	}
 }

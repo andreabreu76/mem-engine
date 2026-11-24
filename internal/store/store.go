@@ -93,6 +93,9 @@ func (s *Store) CheckFTS5(ctx context.Context) error {
 }
 
 func migrate(ctx context.Context, db *sql.DB) error {
+	if current, err := schemaVersion(ctx, db); err == nil && current == SchemaVersion {
+		return nil
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin migration: %w", err)
@@ -126,7 +129,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func schemaVersion(ctx context.Context, tx *sql.Tx) (int, error) {
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func schemaVersion(ctx context.Context, tx rowQuerier) (int, error) {
 	var exists int
 	err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'").Scan(&exists)
 	if err != nil {

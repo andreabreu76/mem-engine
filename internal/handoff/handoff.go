@@ -125,7 +125,7 @@ func memoriesLine(ms []store.Memory) string {
 func displayPath(projectKey, file string) string {
 	rel, err := filepath.Rel(projectKey, file)
 	if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return rel
+		return filepath.ToSlash(rel)
 	}
 	return filepath.Base(file)
 }

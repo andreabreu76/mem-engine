@@ -262,7 +262,7 @@ The builtin list does not cover `Authorization: Bearer` headers or `.env` style 
 ```toml
 redact_extra = [
   '(?i)authorization:\s*bearer\s+(?P<secret>[A-Za-z0-9._~+/=-]+)',
-  '(?i)\b\w*(?:PASSWORD|SECRET)\w*\s*[=:]\s*(?P<secret>\\?"[^"]*"|\S+)',
+  '(?i)\b\w*(?:PASSWORD|SECRET)\w*\s*[=:]\s*(?P<secret>\\?"(?:\\.|[^"\\])*"|\S+)',
 ]
 ```
 

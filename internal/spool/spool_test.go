@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 type entry struct {
@@ -477,5 +479,29 @@ func TestDrainSkipsFileWhenClaimFails(t *testing.T) {
 				t.Errorf("files left = %v, want [1-1.jsonl]", left)
 			}
 		})
+	}
+}
+
+func TestDrainSkipsWhileAnotherProcessDrains(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	if err := Append(dir, entry{N: 1}); err != nil {
+		t.Fatal(err)
+	}
+	held := flock.New(filepath.Join(dir, drainLock))
+	if ok, err := held.TryLock(); err != nil || !ok {
+		t.Fatalf("TryLock = %v, %v", ok, err)
+	}
+	applied, err := Drain(dir, func(json.RawMessage) error {
+		t.Error("applied a line while another drainer holds the lock")
+		return nil
+	})
+	if err != nil || applied != 0 {
+		t.Errorf("Drain = %d, %v; want 0, nil", applied, err)
+	}
+	if err := held.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := Drain(dir, func(json.RawMessage) error { return nil }); err != nil || applied != 1 {
+		t.Errorf("Drain after unlock = %d, %v; want 1, nil", applied, err)
 	}
 }

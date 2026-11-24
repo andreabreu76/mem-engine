@@ -23,6 +23,7 @@ const (
 	tmpPrefix   = ".spool-"
 	tmpSuffix   = ".tmp"
 	orphanAge   = time.Minute
+	drainLock   = ".drain.lock"
 )
 
 var (

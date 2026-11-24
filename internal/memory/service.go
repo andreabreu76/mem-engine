@@ -184,7 +184,11 @@ func (s *Service) Forget(ctx context.Context, id string) error {
 			unlock()
 			return fmt.Errorf("forget: %w", err)
 		}
-		if latest.Path == current.Path && latest.Project == current.Project {
+		if latest.Project != current.Project {
+			unlock()
+			return fmt.Errorf("forget %s: %w", id, store.ErrNotFound)
+		}
+		if latest.Path == current.Path {
 			err = s.forgetLocked(ctx, repo, name, latest)
 			unlock()
 			return err

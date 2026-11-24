@@ -233,7 +233,9 @@ func (s *server) forget(ctx context.Context, in forgetIn) (string, error) {
 	if err := s.ownMemory(ctx, in.ID); err != nil {
 		return "", err
 	}
-	if err := s.Memory.Forget(ctx, in.ID); err != nil {
+	if err := s.Memory.Forget(ctx, in.ID); errors.Is(err, store.ErrNotFound) {
+		return "", notFound(in.ID)
+	} else if err != nil {
 		return "", err
 	}
 	return "forgot " + in.ID + "\n", nil

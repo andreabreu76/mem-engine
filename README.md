@@ -1,8 +1,28 @@
 # mem-engine
 
+[![CI](https://github.com/andreabreu76/mem-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/andreabreu76/mem-engine/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/andreabreu76/mem-engine.svg)](https://pkg.go.dev/github.com/andreabreu76/mem-engine)
+[![Go Report Card](https://goreportcard.com/badge/github.com/andreabreu76/mem-engine)](https://goreportcard.com/report/github.com/andreabreu76/mem-engine)
+[![Go version](https://img.shields.io/github/go-mod/go-version/andreabreu76/mem-engine)](go.mod)
+[![License: MIT](https://img.shields.io/github/license/andreabreu76/mem-engine)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)](#install)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](#install-as-a-claude-code-plugin)
+[![Last commit](https://img.shields.io/github/last-commit/andreabreu76/mem-engine)](https://github.com/andreabreu76/mem-engine/commits/main)
+[![Stars](https://img.shields.io/github/stars/andreabreu76/mem-engine?style=social)](https://github.com/andreabreu76/mem-engine/stargazers)
+
 A single-binary, local long-term memory for Claude Code that captures session observations and brings relevant context back into new sessions.
 
 ## Status: under development
+
+## Why
+
+Claude Code's native memory loads the whole `MEMORY.md` index into every session, and memory tools that summarize each event with an LLM spend tokens on every tool call. mem-engine captures without an LLM, opens each session with a capped handoff (at most 1,200 characters, about 300 tokens) plus the fixed cost of its MCP tool list (about 1,100 tokens), and lets the agent fetch the rest through layered search (`search`, then `timeline`, then `get`). The fixed cost does not grow with the memory, so mem-engine pays off once the native `MEMORY.md` loads more than about 5 KB; `mem bench` measures it on your own projects. Memory stays local, isolated per project, and editable as Markdown in git or in a local viewer. It builds on ideas from [claude-mem](https://github.com/thedotmack/claude-mem) and [ai-memory](https://github.com/akitaonrails/ai-memory).
+
+## Documentation
+
+- [Why mem-engine](docs/why.md): the problems it solves, the projects it builds on, goals and non-goals
+- [How it works](docs/how-it-works.md): architecture, capture, handoff, layered search, curated memory, viewer and concurrency, with flow diagrams
+- [How it was built](docs/how-it-was-built.md): design, plan, test-driven implementation, reviews and CI
 
 ## Install
 
@@ -242,7 +262,7 @@ The builtin list does not cover `Authorization: Bearer` headers or `.env` style 
 ```toml
 redact_extra = [
   '(?i)authorization:\s*bearer\s+(?P<secret>[A-Za-z0-9._~+/=-]+)',
-  '(?m)^\s*\w*(?:PASSWORD|SECRET)\w*\s*=\s*(?P<secret>\S+)',
+  '(?i)\b\w*(?:PASSWORD|SECRET)\w*\s*[=:]\s*(?P<secret>\\?"(?:\\.|[^"\\])*"|\S+)',
 ]
 ```
 
